@@ -1,5 +1,8 @@
 from typing import Any, Dict, List, Optional
 import httpx
+import json
+import os
+import base64
 from mcp.server.fastmcp import FastMCP
 
 # Initialize FastMCP server
@@ -77,6 +80,25 @@ async def make_api_request(
             print(f"Request Error: {str(e)}")
             return {"error": str(e)}
 
+async def download_image(url: str) -> Optional[bytes]:
+    """
+    Download an image from a URL.
+    
+    Args:
+        url: Image URL
+        
+    Returns:
+        Image data as bytes if successful, None otherwise
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=30.0)
+            response.raise_for_status()
+            return response.content
+    except Exception as e:
+        print(f"Error downloading image: {str(e)}")
+        return None
+
 #
 # Ad Account Endpoints
 #
@@ -99,7 +121,6 @@ async def get_ad_accounts(access_token: str, user_id: str = "me", limit: int = 1
     
     data = await make_api_request(endpoint, access_token, params)
     
-    import json
     return json.dumps(data, indent=2)
 
 @mcp_server.tool()
@@ -122,7 +143,6 @@ async def get_account_info(access_token: str, account_id: str) -> str:
     
     data = await make_api_request(endpoint, access_token, params)
     
-    import json
     return json.dumps(data, indent=2)
 
 #
@@ -151,7 +171,6 @@ async def get_campaigns(access_token: str, account_id: str, limit: int = 10, sta
     
     data = await make_api_request(endpoint, access_token, params)
     
-    import json
     return json.dumps(data, indent=2)
 
 @mcp_server.tool()
@@ -170,7 +189,6 @@ async def get_campaign_details(access_token: str, campaign_id: str) -> str:
     
     data = await make_api_request(endpoint, access_token, params)
     
-    import json
     return json.dumps(data, indent=2)
 
 @mcp_server.tool()
@@ -216,7 +234,6 @@ async def create_campaign(
     
     data = await make_api_request(endpoint, access_token, params, method="POST")
     
-    import json
     return json.dumps(data, indent=2)
 
 #
@@ -245,7 +262,6 @@ async def get_adsets(access_token: str, account_id: str, limit: int = 10, campai
     
     data = await make_api_request(endpoint, access_token, params)
     
-    import json
     return json.dumps(data, indent=2)
 
 @mcp_server.tool()
@@ -264,7 +280,6 @@ async def get_adset_details(access_token: str, adset_id: str) -> str:
     
     data = await make_api_request(endpoint, access_token, params)
     
-    import json
     return json.dumps(data, indent=2)
 
 #
@@ -303,7 +318,6 @@ async def get_ads(
     
     data = await make_api_request(endpoint, access_token, params)
     
-    import json
     return json.dumps(data, indent=2)
 
 @mcp_server.tool()
@@ -322,7 +336,6 @@ async def get_ad_details(access_token: str, ad_id: str) -> str:
     
     data = await make_api_request(endpoint, access_token, params)
     
-    import json
     return json.dumps(data, indent=2)
 
 @mcp_server.tool()
@@ -343,19 +356,16 @@ async def get_ad_creatives(access_token: str, ad_id: str) -> str:
     ad_data = await make_api_request(endpoint, access_token, params)
     
     if "error" in ad_data:
-        import json
         return json.dumps(ad_data, indent=2)
     
     if "creative" not in ad_data:
-        import json
         return json.dumps({"error": "No creative found for this ad"}, indent=2)
     
     creative_id = ad_data.get("creative", {}).get("id")
     if not creative_id:
-        import json
         return json.dumps({"error": "Creative ID not found", "ad_data": ad_data}, indent=2)
     
-    # Now get the creative details
+    # Now get the creative details with a simplified set of fields
     creative_endpoint = f"{creative_id}"
     creative_params = {
         "fields": "id,name,title,body,image_url,object_story_spec,url_tags,link_url,thumbnail_url,video_id,call_to_action_type,asset_feed_spec,object_type"
@@ -363,8 +373,107 @@ async def get_ad_creatives(access_token: str, ad_id: str) -> str:
     
     creative_data = await make_api_request(creative_endpoint, access_token, creative_params)
     
-    import json
+    # Attempt to get the actual image URL by expanding object_story_spec
+    if "object_story_spec" in creative_data:
+        spec = creative_data.get("object_story_spec", {})
+        
+        # For link ads
+        if "link_data" in spec:
+            link_data = spec.get("link_data", {})
+            if "image_hash" in link_data:
+                # Get the actual image URL from the image hash
+                image_hash = link_data.get("image_hash")
+                image_endpoint = f"{ad_data.get('id')}/adimages"
+                image_params = {
+                    "hashes": [image_hash]
+                }
+                image_data = await make_api_request(image_endpoint, access_token, image_params)
+                if "data" in image_data and len(image_data["data"]) > 0:
+                    creative_data["full_image_url"] = image_data["data"][0].get("url")
+        
+        # For photo ads
+        if "photo_data" in spec:
+            photo_data = spec.get("photo_data", {})
+            if "image_hash" in photo_data:
+                image_hash = photo_data.get("image_hash")
+                # Get the URL for the photo
+                image_endpoint = f"{ad_data.get('id')}/adimages"
+                image_params = {
+                    "hashes": [image_hash]
+                }
+                image_data = await make_api_request(image_endpoint, access_token, image_params)
+                if "data" in image_data and len(image_data["data"]) > 0:
+                    creative_data["full_image_url"] = image_data["data"][0].get("url")
+    
+    # If we have a thumbnail URL or image URL, we can directly use that
+    if "thumbnail_url" in creative_data:
+        creative_data["full_image_url"] = creative_data["thumbnail_url"]
+    elif "image_url" in creative_data:
+        creative_data["full_image_url"] = creative_data["image_url"]
+    
     return json.dumps(creative_data, indent=2)
+
+@mcp_server.tool()
+async def download_ad_creative_image(access_token: str, ad_id: str, output_path: str = "ad_creatives") -> str:
+    """
+    Download and save the creative image for a specific ad.
+    
+    Args:
+        access_token: Meta API access token
+        ad_id: Meta Ads ad ID
+        output_path: Path to save the image (default: 'ad_creatives')
+    """
+    # Get the creative details first
+    creative_json = await get_ad_creatives(access_token, ad_id)
+    creative_data = json.loads(creative_json)
+    
+    # Look for image URLs in the response
+    image_url = None
+    if "full_image_url" in creative_data:
+        image_url = creative_data.get("full_image_url")
+    elif "image_url" in creative_data:
+        image_url = creative_data.get("image_url")
+    elif "thumbnail_url" in creative_data:
+        image_url = creative_data.get("thumbnail_url")
+    elif "object_story_spec" in creative_data:
+        spec = creative_data.get("object_story_spec", {})
+        if "link_data" in spec and "image_url" in spec["link_data"]:
+            image_url = spec["link_data"].get("image_url")
+    
+    if not image_url:
+        return json.dumps({
+            "error": "No image URL found in creative",
+            "creative_data": creative_data
+        }, indent=2)
+    
+    # Download the image
+    image_data = await download_image(image_url)
+    if not image_data:
+        return json.dumps({
+            "error": "Failed to download image",
+            "image_url": image_url
+        }, indent=2)
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(output_path, exist_ok=True)
+    
+    # Save the image to a file
+    filename = f"{ad_id}_creative.jpg"
+    file_path = os.path.join(output_path, filename)
+    
+    with open(file_path, "wb") as f:
+        f.write(image_data)
+    
+    # Also encode the image as base64 for inline display
+    base64_data = base64.b64encode(image_data).decode("utf-8")
+    
+    return json.dumps({
+        "success": True,
+        "file_path": file_path,
+        "image_url": image_url,
+        "creative_data": creative_data,
+        "base64_image": base64_data
+    }, indent=2)
 
 #
 # Insights Endpoints
@@ -400,7 +509,6 @@ async def get_insights(
     
     data = await make_api_request(endpoint, access_token, params)
     
-    import json
     return json.dumps(data, indent=2)
 
 if __name__ == "__main__":
