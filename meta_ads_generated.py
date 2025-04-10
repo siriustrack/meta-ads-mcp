@@ -13,6 +13,9 @@ META_GRAPH_API_VERSION = "v20.0"
 META_GRAPH_API_BASE = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}"
 USER_AGENT = "meta-ads-mcp/1.0"
 
+# Global store for ad creative images
+ad_creative_images = {}
+
 class GraphAPIError(Exception):
     """Exception raised for errors from the Graph API."""
     def __init__(self, error_data: Dict[str, Any]):
@@ -365,39 +368,100 @@ async def get_ad_creatives(access_token: str, ad_id: str) -> str:
     if not creative_id:
         return json.dumps({"error": "Creative ID not found", "ad_data": ad_data}, indent=2)
     
-    # Now get the creative details with a simplified set of fields
+    # Now get the creative details with essential fields
     creative_endpoint = f"{creative_id}"
     creative_params = {
-        "fields": "id,name,title,body,image_url,object_story_spec,url_tags,link_url,thumbnail_url,video_id,call_to_action_type,asset_feed_spec,object_type"
+        "fields": "id,name,title,body,image_url,object_story_spec,url_tags,link_url,thumbnail_url,image_hash,asset_feed_spec,object_type"
     }
     
     creative_data = await make_api_request(creative_endpoint, access_token, creative_params)
     
-    # Attempt to get the actual image URL by expanding object_story_spec
+    # Try to get full-size images in different ways:
+    
+    # 1. First approach: Get ad images directly using the adimages endpoint
+    if "image_hash" in creative_data:
+        image_hash = creative_data.get("image_hash")
+        image_endpoint = f"act_{ad_data.get('account_id', '')}/adimages"
+        image_params = {
+            "hashes": [image_hash]
+        }
+        image_data = await make_api_request(image_endpoint, access_token, image_params)
+        if "data" in image_data and len(image_data["data"]) > 0:
+            creative_data["full_image_url"] = image_data["data"][0].get("url")
+    
+    # 2. For creatives with object_story_spec
     if "object_story_spec" in creative_data:
         spec = creative_data.get("object_story_spec", {})
         
         # For link ads
         if "link_data" in spec:
             link_data = spec.get("link_data", {})
-            if "image_hash" in link_data:
-                # Get the actual image URL from the image hash
+            # If there's an explicit image_url, use it
+            if "image_url" in link_data:
+                creative_data["full_image_url"] = link_data.get("image_url")
+            # If there's an image_hash, try to get the full image
+            elif "image_hash" in link_data:
                 image_hash = link_data.get("image_hash")
-                image_endpoint = f"{ad_data.get('id')}/adimages"
-                image_params = {
-                    "hashes": [image_hash]
-                }
-                image_data = await make_api_request(image_endpoint, access_token, image_params)
-                if "data" in image_data and len(image_data["data"]) > 0:
-                    creative_data["full_image_url"] = image_data["data"][0].get("url")
+                account_id = ad_data.get('account_id', '')
+                if not account_id:
+                    # Try to get account ID from ad ID
+                    ad_details_endpoint = f"{ad_id}"
+                    ad_details_params = {
+                        "fields": "account_id"
+                    }
+                    ad_details = await make_api_request(ad_details_endpoint, access_token, ad_details_params)
+                    account_id = ad_details.get('account_id', '')
+                
+                if account_id:
+                    image_endpoint = f"act_{account_id}/adimages"
+                    image_params = {
+                        "hashes": [image_hash]
+                    }
+                    image_data = await make_api_request(image_endpoint, access_token, image_params)
+                    if "data" in image_data and len(image_data["data"]) > 0:
+                        creative_data["full_image_url"] = image_data["data"][0].get("url")
         
         # For photo ads
         if "photo_data" in spec:
             photo_data = spec.get("photo_data", {})
             if "image_hash" in photo_data:
                 image_hash = photo_data.get("image_hash")
-                # Get the URL for the photo
-                image_endpoint = f"{ad_data.get('id')}/adimages"
+                account_id = ad_data.get('account_id', '')
+                if not account_id:
+                    # Try to get account ID from ad ID
+                    ad_details_endpoint = f"{ad_id}"
+                    ad_details_params = {
+                        "fields": "account_id"
+                    }
+                    ad_details = await make_api_request(ad_details_endpoint, access_token, ad_details_params)
+                    account_id = ad_details.get('account_id', '')
+                
+                if account_id:
+                    image_endpoint = f"act_{account_id}/adimages"
+                    image_params = {
+                        "hashes": [image_hash]
+                    }
+                    image_data = await make_api_request(image_endpoint, access_token, image_params)
+                    if "data" in image_data and len(image_data["data"]) > 0:
+                        creative_data["full_image_url"] = image_data["data"][0].get("url")
+    
+    # 3. If there's an asset_feed_spec, try to get images from there
+    if "asset_feed_spec" in creative_data and "images" in creative_data["asset_feed_spec"]:
+        images = creative_data["asset_feed_spec"]["images"]
+        if images and len(images) > 0 and "hash" in images[0]:
+            image_hash = images[0]["hash"]
+            account_id = ad_data.get('account_id', '')
+            if not account_id:
+                # Try to get account ID
+                ad_details_endpoint = f"{ad_id}"
+                ad_details_params = {
+                    "fields": "account_id"
+                }
+                ad_details = await make_api_request(ad_details_endpoint, access_token, ad_details_params)
+                account_id = ad_details.get('account_id', '')
+            
+            if account_id:
+                image_endpoint = f"act_{account_id}/adimages"
                 image_params = {
                     "hashes": [image_hash]
                 }
@@ -405,11 +469,24 @@ async def get_ad_creatives(access_token: str, ad_id: str) -> str:
                 if "data" in image_data and len(image_data["data"]) > 0:
                     creative_data["full_image_url"] = image_data["data"][0].get("url")
     
-    # If we have a thumbnail URL or image URL, we can directly use that
-    if "thumbnail_url" in creative_data:
-        creative_data["full_image_url"] = creative_data["thumbnail_url"]
-    elif "image_url" in creative_data:
-        creative_data["full_image_url"] = creative_data["image_url"]
+    # If we have a thumbnail_url but no full_image_url, let's attempt to convert the thumbnail URL to full size
+    if "thumbnail_url" in creative_data and "full_image_url" not in creative_data:
+        thumbnail_url = creative_data["thumbnail_url"]
+        # Try to convert the URL to get higher resolution by removing size parameters
+        if "p64x64" in thumbnail_url:
+            full_url = thumbnail_url.replace("p64x64", "p1080x1080")
+            creative_data["full_image_url"] = full_url
+        elif "dst-emg0" in thumbnail_url:
+            # Remove the dst-emg0 parameter that seems to reduce size
+            full_url = thumbnail_url.replace("dst-emg0_", "")
+            creative_data["full_image_url"] = full_url
+    
+    # Fallback to using thumbnail or image_url if we still don't have a full image
+    if "full_image_url" not in creative_data:
+        if "thumbnail_url" in creative_data:
+            creative_data["full_image_url"] = creative_data["thumbnail_url"]
+        elif "image_url" in creative_data:
+            creative_data["full_image_url"] = creative_data["image_url"]
     
     return json.dumps(creative_data, indent=2)
 
@@ -423,6 +500,15 @@ async def download_ad_creative_image(access_token: str, ad_id: str, output_path:
         ad_id: Meta Ads ad ID
         output_path: Path to save the image (default: 'ad_creatives')
     """
+    # First, get the account_id - this is needed for some advanced image queries
+    endpoint = f"{ad_id}"
+    params = {
+        "fields": "account_id"
+    }
+    
+    ad_data = await make_api_request(endpoint, access_token, params)
+    account_id = ad_data.get('account_id', '')
+    
     # Get the creative details first
     creative_json = await get_ad_creatives(access_token, ad_id)
     creative_data = json.loads(creative_json)
@@ -439,12 +525,42 @@ async def download_ad_creative_image(access_token: str, ad_id: str, output_path:
         spec = creative_data.get("object_story_spec", {})
         if "link_data" in spec and "image_url" in spec["link_data"]:
             image_url = spec["link_data"].get("image_url")
+        elif "link_data" in spec and "image_hash" in spec["link_data"]:
+            # Get image from hash
+            image_hash = spec["link_data"].get("image_hash")
+            image_endpoint = f"act_{account_id}/adimages"
+            image_params = {
+                "hashes": [image_hash]
+            }
+            image_data = await make_api_request(image_endpoint, access_token, image_params)
+            if "data" in image_data and len(image_data["data"]) > 0:
+                image_url = image_data["data"][0].get("url")
+    
+    # If we still don't have an image URL, try the adimages endpoint directly
+    if not image_url and "asset_feed_spec" in creative_data and "images" in creative_data["asset_feed_spec"]:
+        images = creative_data["asset_feed_spec"]["images"]
+        if images and len(images) > 0 and "hash" in images[0]:
+            image_hash = images[0]["hash"]
+            image_endpoint = f"act_{account_id}/adimages"
+            image_params = {
+                "hashes": [image_hash]
+            }
+            image_data = await make_api_request(image_endpoint, access_token, image_params)
+            if "data" in image_data and len(image_data["data"]) > 0:
+                image_url = image_data["data"][0].get("url")
     
     if not image_url:
         return json.dumps({
             "error": "No image URL found in creative",
             "creative_data": creative_data
         }, indent=2)
+    
+    # Try to convert the URL to get higher resolution by removing size parameters
+    if "p64x64" in image_url:
+        image_url = image_url.replace("p64x64", "p1080x1080")
+    elif "dst-emg0" in image_url:
+        # Remove the dst-emg0 parameter that seems to reduce size
+        image_url = image_url.replace("dst-emg0_", "")
     
     # Download the image
     image_data = await download_image(image_url)
@@ -454,26 +570,54 @@ async def download_ad_creative_image(access_token: str, ad_id: str, output_path:
             "image_url": image_url
         }, indent=2)
     
-    # Create output directory if it doesn't exist
-    os.makedirs(output_path, exist_ok=True)
+    # Store the image data in our global dictionary with the ad_id as key
+    resource_id = f"ad_creative_{ad_id}"
+    resource_uri = f"meta-ads://images/{resource_id}"
+    ad_creative_images[resource_id] = {
+        "data": image_data,
+        "mime_type": "image/jpeg",
+        "name": f"Ad Creative for {ad_id}"
+    }
     
-    # Save the image to a file
-    filename = f"{ad_id}_creative.jpg"
-    file_path = os.path.join(output_path, filename)
-    
-    with open(file_path, "wb") as f:
-        f.write(image_data)
-    
-    # Also encode the image as base64 for inline display
+    # Encode the image as base64 for inline display
     base64_data = base64.b64encode(image_data).decode("utf-8")
     
     return json.dumps({
         "success": True,
-        "file_path": file_path,
+        "resource_uri": resource_uri,
         "image_url": image_url,
         "creative_data": creative_data,
         "base64_image": base64_data
     }, indent=2)
+
+# Resource Handling
+@mcp_server.resource(uri="meta-ads://resources")
+async def list_resources() -> Dict[str, Any]:
+    """List all available resources (like ad creative images)"""
+    resources = []
+    
+    # Add all ad creative images as resources
+    for resource_id, image_info in ad_creative_images.items():
+        resources.append({
+            "uri": f"meta-ads://images/{resource_id}",
+            "mimeType": image_info["mime_type"],
+            "name": image_info["name"]
+        })
+    
+    return {"resources": resources}
+
+@mcp_server.resource(uri="meta-ads://images/{resource_id}")
+async def get_resource(resource_id: str) -> Dict[str, Any]:
+    """Get a specific resource by URI"""
+    if resource_id in ad_creative_images:
+        image_info = ad_creative_images[resource_id]
+        return {
+            "data": base64.b64encode(image_info["data"]).decode("utf-8"),
+            "mimeType": image_info["mime_type"]
+        }
+    
+    # Resource not found
+    return {"error": f"Resource not found: {resource_id}"}
 
 #
 # Insights Endpoints
