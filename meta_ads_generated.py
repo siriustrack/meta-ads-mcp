@@ -98,6 +98,12 @@ async def download_image(url: str) -> Optional[bytes]:
             response = await client.get(url, timeout=30.0)
             response.raise_for_status()
             return response.content
+    except httpx.HTTPStatusError as e:
+        print(f"HTTP Error: {e.response.status_code} - {str(e)}")
+        return None
+    except httpx.RequestError as e:
+        print(f"Request Error: {str(e)}")
+        return None
     except Exception as e:
         print(f"Error downloading image: {str(e)}")
         return None
@@ -567,7 +573,8 @@ async def download_ad_creative_image(access_token: str, ad_id: str, output_path:
     if not image_data:
         return json.dumps({
             "error": "Failed to download image",
-            "image_url": image_url
+            "image_url": image_url,
+            "details": "Unable to download image. This might be due to authentication requirements, URL expiration, or content restrictions imposed by Meta. Consider accessing the image through the Meta Ads Manager interface."
         }, indent=2)
     
     # Store the image data in our global dictionary with the ad_id as key
