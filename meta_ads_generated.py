@@ -773,7 +773,7 @@ async def get_resource(resource_id: str) -> Dict[str, Any]:
 async def get_insights(
     access_token: str,
     object_id: str,
-    time_range: str = "last_30_days",
+    time_range: str = "maximum",
     breakdown: str = "",
     level: str = "ad"
 ) -> str:
@@ -783,7 +783,7 @@ async def get_insights(
     Args:
         access_token: Meta API access token
         object_id: ID of the campaign, ad set, ad or account
-        time_range: Time range for insights (default: last_30_days, options: today, yesterday, last_7_days, last_30_days)
+        time_range: Time range for insights (default: last_30_days, options: today, yesterday, this_month, last_month, this_quarter, maximum, data_maximum, last_3d, last_7d, last_14d, last_28d, last_30d, last_90d, last_week_mon_sun, last_week_sun_sat, last_quarter, last_year, this_week_mon_today, this_week_sun_today, this_year)
         breakdown: Optional breakdown dimension (e.g., age, gender, country)
         level: Level of aggregation (ad, adset, campaign, account)
     """
