@@ -3,9 +3,11 @@ import httpx
 import json
 import os
 import base64
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Image
 import datetime
 from urllib.parse import urlparse
+from PIL import Image as PILImage
+import io
 
 # Initialize FastMCP server
 mcp_server = FastMCP("meta-ads-generated")
@@ -1164,6 +1166,38 @@ async def save_ad_image_via_api(access_token: str, ad_id: str) -> str:
         result["message"] = "Failed to retrieve ad image through any API method"
         
     return json.dumps(result, indent=2)
+
+@mcp_server.tool()
+def analyze_ad_creative_image(image_path: str) -> Image:
+    """
+    Open and analyze a local ad creative image previously downloaded with download_ad_creative_image.
+    This returns the image directly to the LLM for visual analysis.
+    
+    Args:
+        image_path: Path to the local image file (e.g., ad_creatives/ad_123456789_image.jpg)
+    
+    Returns:
+        The image for direct LLM analysis
+    """
+    try:
+        # Open the image file using PIL
+        img = PILImage.open(image_path)
+        
+        # Convert to RGB if needed (in case of RGBA, etc.)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+            
+        # Create a byte stream of the image data
+        byte_arr = io.BytesIO()
+        img.save(byte_arr, format="JPEG")
+        img_bytes = byte_arr.getvalue()
+        
+        # Return as an Image object that LLM can directly analyze
+        return Image(data=img_bytes, format="jpeg")
+        
+    except Exception as e:
+        # Return an error message if something goes wrong
+        return f"Error analyzing image: {str(e)}"
 
 if __name__ == "__main__":
     # Initialize and run the server
