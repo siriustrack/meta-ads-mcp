@@ -1,6 +1,6 @@
 """Meta Ads MCP - Model Calling Protocol plugin for Meta Ads API."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # Import key functions to make them available at package level
 from .api import (

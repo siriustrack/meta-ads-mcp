@@ -11,9 +11,61 @@ A [Model Calling Protocol (MCP)](https://github.com/anthropics/anthropic-tools) 
 - Image download and analysis capabilities
 - Performance insights
 
-## Setup
+## Installation
+
+### Using uv (recommended)
+
+When using uv no specific installation is needed. We can use uvx to directly run meta-ads-mcp:
+
+```bash
+uvx meta-ads-mcp
+```
+
+If you want to install the package:
+
+```bash
+uv pip install meta-ads-mcp
+```
+
+For development (if you've cloned the repository):
+
+```bash
+# From the repository root
+uv pip install -e .
+```
+
+### Using pip
+
+Alternatively, you can install meta-ads-mcp via pip:
+
+```bash
+pip install meta-ads-mcp
+```
+
+After installation, you can run it as:
+
+```bash
+python -m meta_ads_mcp
+```
+
+## Configuration
+
+### Usage with Claude in Cursor
+
+Add this to your `claude_desktop_config.json` to integrate with Claude in Cursor:
+
+```json
+"mcpServers": {
+  "meta-ads": {
+    "command": "uvx",
+    "args": ["meta-ads-mcp"]
+  }
+}
+```
 
 ### 1. Create a Meta Developer App
+
+Before using the MCP server, you'll need to set up a Meta Developer App:
 
 1. Go to [Meta for Developers](https://developers.facebook.com/) and create a new app
 2. Choose the "Consumer" app type
@@ -21,42 +73,19 @@ A [Model Calling Protocol (MCP)](https://github.com/anthropics/anthropic-tools) 
 4. Configure your app's OAuth redirect URI to include `http://localhost:8888/callback`
 5. Note your App ID (Client ID) for use with the MCP
 
-### 2. Install the Package
+## Usage
 
-#### Using uv (Recommended)
-
-Install directly from GitHub:
+### Command-line Usage
 
 ```bash
-uv pip install git+https://github.com/nictuku/meta-ads-mcp.git
+# Start the MCP server
+uvx meta-ads-mcp
+
+# Authenticate with Meta Ads
+uvx meta-ads-login --app-id YOUR_APP_ID
 ```
 
-Or if you've cloned the repository:
-
-```bash
-# From the repository root
-uv pip install -e .
-```
-
-#### Using pip
-
-```bash
-pip install git+https://github.com/nictuku/meta-ads-mcp.git
-```
-
-### 3. Install Dependencies (If installing from source)
-
-```bash
-uv pip install -r requirements.txt
-```
-
-Or:
-
-```bash
-pip install -r requirements.txt
-```
-
-## Authentication
+### Authentication
 
 The Meta Ads MCP uses the OAuth 2.0 flow designed for desktop apps. When authenticating, it will:
 
@@ -84,7 +113,7 @@ There are two ways to authenticate with the Meta Ads API:
    You can also initiate authentication directly from the command line:
 
    ```bash
-   python meta_ads_generated.py --login --app-id YOUR_APP_ID
+   uvx meta-ads-login --app-id YOUR_APP_ID
    ```
    
    Or use the convenience scripts:
@@ -107,12 +136,6 @@ Tokens are cached in a platform-specific secure location:
 You do not need to provide your access token for each command; it will be automatically retrieved from the cache.
 
 ## Usage Examples
-
-### Test Authentication
-
-```bash
-python test_meta_ads_auth.py --app-id YOUR_APP_ID
-```
 
 ### Get Ad Accounts
 
@@ -205,7 +228,7 @@ If you encounter authentication issues:
    - Check that the callback server is running properly (the tool will report this)
 
 2. When using the command line:
-   - Run with `--force-login` to get a fresh token: `python meta_ads_generated.py --login --app-id YOUR_APP_ID --force-login`
+   - Run with `--force-login` to get a fresh token: `uvx meta-ads-login --app-id YOUR_APP_ID --force-login`
    - Make sure the terminal has permissions to open a browser window
 
 3. General authentication troubleshooting:
@@ -222,8 +245,11 @@ If you receive errors from the Meta API:
 2. Ensure the user has appropriate permissions on the ad accounts
 3. Check if there are rate limits or other restrictions on your app
 
-## Files
+## Versioning
 
-This repository contains the implementation for the Meta Ads Marketing API Client Protocol (MCP).
+You can check the current version of the package:
 
-- `meta_ads_generated.py`: The main MCP implementation for Meta Ads API 
+```python
+import meta_ads_mcp
+print(meta_ads_mcp.__version__)
+``` 
