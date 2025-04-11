@@ -1199,6 +1199,139 @@ def analyze_ad_creative_image(image_path: str) -> Image:
         # Return an error message if something goes wrong
         return f"Error analyzing image: {str(e)}"
 
+@mcp_server.tool()
+async def get_ad_image(access_token: str, ad_id: str) -> Image:
+    """
+    Get, download, and analyze a Meta ad image in one step.
+    This tool combines the functionality of get_ad_creatives, download_ad_creative_image, 
+    and analyze_ad_creative_image into a single operation.
+    
+    Args:
+        access_token: Meta API access token
+        ad_id: Meta Ads ad ID
+    
+    Returns:
+        The ad image ready for direct visual analysis
+    """
+    print(f"Attempting to get and analyze creative image for ad {ad_id}")
+    
+    # First, get creative and account IDs
+    ad_endpoint = f"{ad_id}"
+    ad_params = {
+        "fields": "creative{id},account_id"
+    }
+    
+    ad_data = await make_api_request(ad_endpoint, access_token, ad_params)
+    
+    if "error" in ad_data:
+        return f"Error: Could not get ad data - {json.dumps(ad_data)}"
+    
+    # Extract account_id
+    account_id = ad_data.get("account_id", "")
+    if not account_id:
+        return "Error: No account ID found"
+    
+    # Extract creative ID
+    if "creative" not in ad_data:
+        return "Error: No creative found for this ad"
+        
+    creative_data = ad_data.get("creative", {})
+    creative_id = creative_data.get("id")
+    if not creative_id:
+        return "Error: No creative ID found"
+    
+    # Get creative details to find image hash
+    creative_endpoint = f"{creative_id}"
+    creative_params = {
+        "fields": "id,name,image_hash,asset_feed_spec"
+    }
+    
+    creative_details = await make_api_request(creative_endpoint, access_token, creative_params)
+    
+    # Identify image hashes to use from creative
+    image_hashes = []
+    
+    # Check for direct image_hash on creative
+    if "image_hash" in creative_details:
+        image_hashes.append(creative_details["image_hash"])
+    
+    # Check asset_feed_spec for image hashes - common in Advantage+ ads
+    if "asset_feed_spec" in creative_details and "images" in creative_details["asset_feed_spec"]:
+        for image in creative_details["asset_feed_spec"]["images"]:
+            if "hash" in image:
+                image_hashes.append(image["hash"])
+    
+    if not image_hashes:
+        # If no hashes found, try to extract from the first creative we found in the API
+        # Get creative for ad to try to extract hash
+        creative_json = await get_ad_creatives(access_token, ad_id)
+        creative_data = json.loads(creative_json)
+        
+        # Try to extract hash from asset_feed_spec
+        if "asset_feed_spec" in creative_data and "images" in creative_data["asset_feed_spec"]:
+            images = creative_data["asset_feed_spec"]["images"]
+            if images and len(images) > 0 and "hash" in images[0]:
+                image_hashes.append(images[0]["hash"])
+    
+    if not image_hashes:
+        return "Error: No image hashes found in creative"
+    
+    print(f"Found image hashes: {image_hashes}")
+    
+    # Now fetch image data using adimages endpoint with specific format
+    image_endpoint = f"act_{account_id}/adimages"
+    
+    # Format the hashes parameter exactly as in our successful curl test
+    hashes_str = f'["{image_hashes[0]}"]'  # Format first hash only, as JSON string array
+    
+    image_params = {
+        "fields": "hash,url,width,height,name,status",
+        "hashes": hashes_str
+    }
+    
+    print(f"Requesting image data with params: {image_params}")
+    image_data = await make_api_request(image_endpoint, access_token, image_params)
+    
+    if "error" in image_data:
+        return f"Error: Failed to get image data - {json.dumps(image_data)}"
+    
+    if "data" not in image_data or not image_data["data"]:
+        return "Error: No image data returned from API"
+    
+    # Get the first image URL
+    first_image = image_data["data"][0]
+    image_url = first_image.get("url")
+    
+    if not image_url:
+        return "Error: No valid image URL found"
+    
+    print(f"Downloading image from URL: {image_url}")
+    
+    # Download the image
+    image_bytes = await download_image(image_url)
+    
+    if not image_bytes:
+        return "Error: Failed to download image"
+    
+    try:
+        # Convert bytes to PIL Image
+        img = PILImage.open(io.BytesIO(image_bytes))
+        
+        # Convert to RGB if needed
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+            
+        # Create a byte stream of the image data
+        byte_arr = io.BytesIO()
+        img.save(byte_arr, format="JPEG")
+        img_bytes = byte_arr.getvalue()
+        
+        # Return as an Image object that LLM can directly analyze
+        return Image(data=img_bytes, format="jpeg")
+        
+    except Exception as e:
+        return f"Error processing image: {str(e)}"
+
 if __name__ == "__main__":
     # Initialize and run the server
     mcp_server.run(transport='stdio') 
