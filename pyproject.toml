@@ -33,7 +33,6 @@ dependencies = [
 
 [project.scripts]
 meta-ads-login = "meta_ads_mcp.meta_ads_generated:login_cli"
-meta-ads-watch = "meta_ads_mcp.meta_ads_watch:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["meta_ads_mcp"]
