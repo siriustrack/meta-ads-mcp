@@ -153,4 +153,55 @@ If you receive errors from the Meta API:
 
 1. Verify your app has the Marketing API product added
 2. Ensure the user has appropriate permissions on the ad accounts
-3. Check if there are rate limits or other restrictions on your app 
+3. Check if there are rate limits or other restrictions on your app
+
+# Meta Ads MCP Wrapper
+
+This repository contains a wrapper for the Meta Ads Marketing API Client Protocol (MCP) implementation.
+
+## Files
+
+- `meta_ads_generated.py`: The main MCP implementation for Meta Ads API
+- `meta_ads_watch.py`: A wrapper script that monitors for file changes and automatically restarts the MCP server
+
+## Requirements
+
+- Python 3.6+
+- [uv](https://github.com/astral-sh/uv) - A Python package installer and resolver
+- Required Python packages (installed via uv)
+
+## Usage
+
+### Running with Auto-Reload
+
+To run the Meta Ads MCP server with auto-reload capability:
+
+```bash
+./meta_ads_watch.py
+```
+
+This will:
+1. Start the MCP server using `uv run python meta_ads_generated.py`
+2. Monitor the main script file for changes
+3. Automatically restart the server when changes are detected
+4. Preserve stdin/stdout connections to ensure MCP clients stay connected
+
+### Authentication
+
+You can pass authentication arguments to the underlying script:
+
+```bash
+./meta_ads_watch.py --login --app-id YOUR_APP_ID
+```
+
+### Development
+
+When developing, simply edit the `meta_ads_generated.py` file. The wrapper will detect changes and restart the server automatically while preserving the connections to any MCP clients.
+
+## How It Works
+
+The wrapper script:
+- Uses a separate thread to monitor file changes
+- Properly handles process termination and signal forwarding
+- Ensures stdin/stdout are properly passed to the child process
+- Writes status messages to stderr to avoid interfering with the MCP protocol 

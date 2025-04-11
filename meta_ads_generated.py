@@ -14,6 +14,9 @@ import platform
 import pathlib
 import argparse
 import asyncio
+import threading
+import socket
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # Initialize FastMCP server
 mcp_server = FastMCP("meta-ads-generated", use_consistent_tool_format=True)
@@ -43,6 +46,88 @@ ad_creative_images = {}
 
 # Global flag for authentication state
 needs_authentication = False
+
+# Global variable for server thread and state
+callback_server_thread = None
+callback_server_lock = threading.Lock()
+callback_server_running = False
+callback_server_port = None
+# Global token container for communication between threads
+token_container = {"token": None, "expires_in": None, "user_id": None}
+
+# Callback Handler class definition
+class CallbackHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        global token_container, auth_manager, needs_authentication
+        
+        if self.path.startswith("/callback"):
+            # Return a page that extracts token from URL hash fragment
+            self.send_response(200)
+            self.send_header("Content-type", "text/html")
+            self.end_headers()
+            
+            html = """
+            <html>
+            <head><title>Authentication Successful</title></head>
+            <body>
+                <h1>Authentication Successful!</h1>
+                <p>You can close this window and return to the application.</p>
+                <script>
+                    // Extract token from URL hash
+                    const hash = window.location.hash.substring(1);
+                    const params = new URLSearchParams(hash);
+                    const token = params.get('access_token');
+                    const expires_in = params.get('expires_in');
+                    
+                    // Send token back to server using fetch
+                    fetch('/token?' + new URLSearchParams({
+                        token: token,
+                        expires_in: expires_in
+                    }))
+                    .then(response => console.log('Token sent to app'));
+                </script>
+            </body>
+            </html>
+            """
+            self.wfile.write(html.encode())
+            return
+        
+        if self.path.startswith("/token"):
+            # Extract token from query params
+            query = parse_qs(urlparse(self.path).query)
+            token_container["token"] = query.get("token", [""])[0]
+            
+            if "expires_in" in query:
+                try:
+                    token_container["expires_in"] = int(query.get("expires_in", ["0"])[0])
+                except ValueError:
+                    token_container["expires_in"] = None
+            
+            # Send success response
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Token received")
+            
+            # Process the token (save it) immediately
+            if token_container["token"]:
+                # Create token info and save to cache
+                token_info = TokenInfo(
+                    access_token=token_container["token"],
+                    expires_in=token_container["expires_in"]
+                )
+                auth_manager.token_info = token_info
+                auth_manager._save_token_to_cache()
+                
+                # Reset auth needed flag
+                needs_authentication = False
+                
+                print(f"Token received and cached (expires in {token_container['expires_in']} seconds)")
+            return
+    
+    # Silence server logs
+    def log_message(self, format, *args):
+        return
 
 # Authentication related classes
 class TokenInfo:
@@ -153,111 +238,6 @@ class AuthManager:
             f"response_type={AUTH_RESPONSE_TYPE}"
         )
     
-    def start_local_server(self) -> str:
-        """
-        Start a local server to handle the OAuth callback.
-        Since we're using implicit flow with client-side token delivery,
-        we'll create a simple server that displays the token for the user to copy.
-        
-        Returns:
-            The access token from the callback
-        """
-        import socket
-        from http.server import HTTPServer, BaseHTTPRequestHandler
-        import threading
-        
-        token_container = {"token": None, "expires_in": None, "user_id": None}
-        
-        class CallbackHandler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                if self.path.startswith("/callback"):
-                    # Return a page that extracts token from URL hash fragment
-                    self.send_response(200)
-                    self.send_header("Content-type", "text/html")
-                    self.end_headers()
-                    
-                    html = """
-                    <html>
-                    <head><title>Authentication Successful</title></head>
-                    <body>
-                        <h1>Authentication Successful!</h1>
-                        <p>You can close this window and return to the application.</p>
-                        <script>
-                            // Extract token from URL hash
-                            const hash = window.location.hash.substring(1);
-                            const params = new URLSearchParams(hash);
-                            const token = params.get('access_token');
-                            const expires_in = params.get('expires_in');
-                            
-                            // Send token back to server using fetch
-                            fetch('/token?' + new URLSearchParams({
-                                token: token,
-                                expires_in: expires_in
-                            }))
-                            .then(response => console.log('Token sent to app'));
-                        </script>
-                    </body>
-                    </html>
-                    """
-                    self.wfile.write(html.encode())
-                    return
-                
-                if self.path.startswith("/token"):
-                    # Extract token from query params
-                    query = parse_qs(urlparse(self.path).query)
-                    token_container["token"] = query.get("token", [""])[0]
-                    
-                    if "expires_in" in query:
-                        try:
-                            token_container["expires_in"] = int(query.get("expires_in", ["0"])[0])
-                        except ValueError:
-                            token_container["expires_in"] = None
-                    
-                    # Send success response
-                    self.send_response(200)
-                    self.send_header("Content-type", "text/plain")
-                    self.end_headers()
-                    self.wfile.write(b"Token received")
-                    
-                    # Signal the server to shut down
-                    threading.Thread(target=server.shutdown).start()
-                    return
-            
-            # Silence server logs
-            def log_message(self, format, *args):
-                return
-        
-        # Find an available port starting with 8888
-        port = 8888
-        max_attempts = 10
-        for attempt in range(max_attempts):
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.bind(('localhost', port))
-                    break
-            except OSError:
-                port += 1
-                if attempt == max_attempts - 1:
-                    raise Exception(f"Could not find an available port after {max_attempts} attempts")
-        
-        # Update redirect URI with actual port
-        self.redirect_uri = f"http://localhost:{port}/callback"
-        
-        # Start HTTP server
-        server = HTTPServer(('localhost', port), CallbackHandler)
-        print(f"Callback server started on port {port}")
-        
-        # Open browser with auth URL
-        auth_url = self.get_auth_url()
-        print(f"Opening browser with URL: {auth_url}")
-        webbrowser.open(auth_url)
-        
-        # Run server until we get the token
-        server.serve_forever()
-        
-        # Return the token
-        return token_container.get("token"), token_container.get("expires_in")
-    
     def authenticate(self, force_refresh: bool = False) -> Optional[str]:
         """
         Authenticate with Meta APIs
@@ -272,31 +252,20 @@ class AuthManager:
         if not force_refresh and self.token_info and not self.token_info.is_expired():
             return self.token_info.access_token
         
-        # Start the OAuth flow
-        try:
-            token, expires_in = self.start_local_server()
-            
-            if not token:
-                print("Authentication failed: No token received")
-                return None
-            
-            self.token_info = TokenInfo(
-                access_token=token,
-                expires_in=expires_in
-            )
-            
-            # Save token to cache
-            self._save_token_to_cache()
-            
-            # Reset the need for authentication
-            global needs_authentication
-            needs_authentication = False
-            
-            return self.token_info.access_token
+        # Start the callback server if not already running
+        port = start_callback_server()
         
-        except Exception as e:
-            print(f"Authentication error: {e}")
-            return None
+        # Generate the auth URL
+        auth_url = self.get_auth_url()
+        
+        # Open browser with auth URL
+        print(f"Opening browser with URL: {auth_url}")
+        webbrowser.open(auth_url)
+        
+        # We don't wait for the token here anymore
+        # The token will be processed by the callback server
+        # Just return None to indicate we've started the flow
+        return None
     
     def get_access_token(self) -> Optional[str]:
         """
@@ -514,14 +483,30 @@ def meta_api_tool(func):
             global needs_authentication
             needs_authentication = True
             
-            # Return a useful error message with instructions
-            auth_url = auth_manager.get_auth_url()
-            result = {
-                "error": "Authentication required",
-                "auth_url": auth_url,
-                "instructions": "Please authenticate with Meta Ads API. Run the login script or visit the auth URL."
+            # Start the callback server
+            port = start_callback_server()
+            
+            # Update auth manager's redirect URI with the current port
+            auth_manager.redirect_uri = f"http://localhost:{port}/callback"
+            
+            # Generate the authentication URL
+            login_url = auth_manager.get_auth_url()
+            
+            # Create a resource response that includes the markdown link format
+            response = {
+                "error": "Authentication required to use Meta Ads API",
+                "login_url": login_url,
+                "server_status": f"Callback server running on port {port}",
+                "markdown_link": f"[Click here to authenticate with Meta Ads API]({login_url})",
+                "message": "IMPORTANT: Please use the Markdown link format in your response to allow the user to click it.",
+                "instructions_for_llm": "You must present this link as clickable Markdown to the user using the markdown_link format provided.",
+                "note": "After authenticating, the token will be automatically saved."
             }
-            return json.dumps(result, indent=2)
+            
+            # Wait a moment to ensure the server is fully started
+            await asyncio.sleep(1)
+            
+            return json.dumps(response, indent=2)
         
         # Update kwargs with the token
         kwargs['access_token'] = access_token
@@ -532,13 +517,30 @@ def meta_api_tool(func):
             
             # If authentication is needed after the call (e.g., token was invalidated)
             if needs_authentication:
-                auth_url = auth_manager.get_auth_url()
-                error_result = {
-                    "error": "Authentication required",
-                    "auth_url": auth_url,
-                    "instructions": "Session expired or token invalid. Please re-authenticate with Meta Ads API."
+                # Start the callback server
+                port = start_callback_server()
+                
+                # Update auth manager's redirect URI with the current port
+                auth_manager.redirect_uri = f"http://localhost:{port}/callback"
+                
+                # Generate the authentication URL
+                login_url = auth_manager.get_auth_url()
+                
+                # Create a resource response that includes the markdown link format
+                response = {
+                    "error": "Session expired or token invalid. Please re-authenticate with Meta Ads API",
+                    "login_url": login_url,
+                    "server_status": f"Callback server running on port {port}",
+                    "markdown_link": f"[Click here to re-authenticate with Meta Ads API]({login_url})",
+                    "message": "IMPORTANT: Please use the Markdown link format in your response to allow the user to click it.",
+                    "instructions_for_llm": "You must present this link as clickable Markdown to the user using the markdown_link format provided.",
+                    "note": "After authenticating, the token will be automatically saved."
                 }
-                return json.dumps(error_result, indent=2)
+                
+                # Wait a moment to ensure the server is fully started
+                await asyncio.sleep(1)
+                
+                return json.dumps(response, indent=2)
             
             return result
         except Exception as e:
@@ -1585,24 +1587,96 @@ async def save_ad_image_via_api(access_token: str = None, ad_id: str = None) -> 
         
     return json.dumps(result, indent=2)
 
+@mcp_server.tool()
+@meta_api_tool
+async def get_login_link(access_token: str = None) -> str:
+    """
+    Get a clickable login link for Meta Ads authentication.
+    
+    Args:
+        access_token: Meta API access token (optional - will use cached token if not provided)
+    
+    Returns:
+        A clickable resource link for Meta authentication
+    """
+    # Check if we have a cached token
+    cached_token = auth_manager.get_access_token()
+    token_status = "No token" if not cached_token else "Valid token"
+    
+    # If we already have a valid token and none was provided, just return success
+    if cached_token and not access_token:
+        return json.dumps({
+            "message": "Already authenticated",
+            "token_status": token_status,
+            "token_preview": cached_token[:10] + "...",
+            "created_at": auth_manager.token_info.created_at,
+            "expires_in": auth_manager.token_info.expires_in
+        }, indent=2)
+    
+    # IMPORTANT: Start the callback server first by calling our helper function
+    # This ensures the server is ready before we provide the URL to the user
+    port = start_callback_server()
+    
+    # Generate direct login URL
+    auth_manager.redirect_uri = f"http://localhost:{port}/callback"  # Ensure port is set correctly
+    login_url = auth_manager.get_auth_url()
+    
+    # Return a special format that helps the LLM format the response properly
+    response = {
+        "login_url": login_url,
+        "token_status": token_status,
+        "server_status": f"Callback server running on port {port}",
+        "markdown_link": f"[Click here to authenticate with Meta Ads]({login_url})",
+        "message": "IMPORTANT: Please use the Markdown link format in your response to allow the user to click it.",
+        "instructions_for_llm": "You must present this link as clickable Markdown to the user using the markdown_link format provided.",
+        "note": "After authenticating, the token will be automatically saved."
+    }
+    
+    # Wait a moment to ensure the server is fully started
+    await asyncio.sleep(1)
+    
+    return json.dumps(response, indent=2)
+
 # Helper function to start the login flow
 def login():
     """
     Start the login flow to authenticate with Meta
     """
     print("Starting Meta Ads authentication flow...")
-    token = auth_manager.authenticate(force_refresh=True)
     
-    if token:
-        print("Authentication successful!")
-        # Verify token works by getting basic user info
-        try:
-            result = asyncio.run(make_api_request("me", token, {}))
-            print(f"Authenticated as: {result.get('name', 'Unknown')} (ID: {result.get('id', 'Unknown')})")
-        except Exception as e:
-            print(f"Warning: Could not verify token: {e}")
-    else:
-        print("Authentication failed. Please try again.")
+    try:
+        # Start the callback server first
+        port = start_callback_server()
+        
+        # Get the auth URL and open the browser
+        auth_url = auth_manager.get_auth_url()
+        print(f"Opening browser with URL: {auth_url}")
+        webbrowser.open(auth_url)
+        
+        # Wait for token to be received
+        print("Waiting for authentication to complete...")
+        max_wait = 300  # 5 minutes
+        wait_interval = 2  # 2 seconds
+        
+        for _ in range(max_wait // wait_interval):
+            if token_container["token"]:
+                token = token_container["token"]
+                print("Authentication successful!")
+                # Verify token works by getting basic user info
+                try:
+                    result = asyncio.run(make_api_request("me", token, {}))
+                    print(f"Authenticated as: {result.get('name', 'Unknown')} (ID: {result.get('id', 'Unknown')})")
+                    return
+                except Exception as e:
+                    print(f"Warning: Could not verify token: {e}")
+                    return
+            time.sleep(wait_interval)
+        
+        print("Authentication timed out. Please try again.")
+    except Exception as e:
+        print(f"Error during authentication: {e}")
+        print(f"Direct authentication URL: {auth_manager.get_auth_url()}")
+        print("You can manually open this URL in your browser to complete authentication.")
 
 async def download_image(url: str) -> Optional[bytes]:
     """
@@ -1696,6 +1770,86 @@ async def try_multiple_download_methods(url: str) -> Optional[bytes]:
         print(f"Method 3 failed: {str(e)}")
     
     return None
+
+def start_callback_server():
+    """Start the callback server if it's not already running"""
+    global callback_server_thread, callback_server_running, callback_server_port
+    
+    with callback_server_lock:
+        if callback_server_running:
+            print(f"Callback server already running on port {callback_server_port}")
+            return callback_server_port
+        
+        # Find an available port
+        port = 8888
+        max_attempts = 10
+        for attempt in range(max_attempts):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(('localhost', port))
+                    break
+            except OSError:
+                port += 1
+                if attempt == max_attempts - 1:
+                    raise Exception(f"Could not find an available port after {max_attempts} attempts")
+        
+        # Update auth manager's redirect URI with new port
+        auth_manager.redirect_uri = f"http://localhost:{port}/callback"
+        callback_server_port = port
+        
+        try:
+            # Get the CallbackHandler class from global scope
+            handler_class = globals()['CallbackHandler']
+            
+            # Create and start server in a daemon thread
+            server = HTTPServer(('localhost', port), handler_class)
+            print(f"Callback server starting on port {port}")
+            
+            # Create a simple flag to signal when the server is ready
+            server_ready = threading.Event()
+            
+            def server_thread():
+                try:
+                    # Signal that the server thread has started
+                    server_ready.set()
+                    print(f"Callback server is now ready on port {port}")
+                    # Start serving HTTP requests
+                    server.serve_forever()
+                except Exception as e:
+                    print(f"Server error: {e}")
+                finally:
+                    with callback_server_lock:
+                        global callback_server_running
+                        callback_server_running = False
+            
+            callback_server_thread = threading.Thread(target=server_thread)
+            callback_server_thread.daemon = True
+            callback_server_thread.start()
+            
+            # Wait for server to be ready (up to 5 seconds)
+            if not server_ready.wait(timeout=5):
+                print("Warning: Timeout waiting for server to start, but continuing anyway")
+            
+            callback_server_running = True
+            
+            # Verify the server is actually accepting connections
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(2)
+                    s.connect(('localhost', port))
+                print(f"Confirmed server is accepting connections on port {port}")
+            except Exception as e:
+                print(f"Warning: Could not verify server connection: {e}")
+                
+            return port
+            
+        except Exception as e:
+            print(f"Error starting callback server: {e}")
+            # Try again with a different port in case of bind issues
+            if "address already in use" in str(e).lower():
+                print("Port may be in use, trying a different port...")
+                return start_callback_server()  # Recursive call with a new port
+            raise e
 
 if __name__ == "__main__":
     # Set up command line arguments
