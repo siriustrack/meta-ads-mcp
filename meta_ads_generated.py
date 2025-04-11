@@ -396,37 +396,6 @@ async def make_api_request(
             print(f"Request Error: {str(e)}")
             return {"error": str(e)}
 
-# Create login info resource
-@mcp_server.resource(uri="meta-ads://auth/login")
-async def get_login_info() -> Dict[str, Any]:
-    """
-    Get login info when authentication is needed.
-    """
-    auth_url = auth_manager.get_auth_url()
-    
-    login_instructions = """
-To authenticate with Meta Ads API:
-
-1. Run the login script with your Meta App ID:
-   - On macOS/Linux: ./login.sh YOUR_APP_ID
-   - On Windows: login.bat YOUR_APP_ID
-   
-2. Or run directly:
-   python meta_ads_generated.py --login --app-id YOUR_APP_ID
-   
-3. Or set the META_APP_ID environment variable and run:
-   python meta_ads_generated.py --login
-   
-This will open a browser window for authentication and cache the token.
-    """
-    
-    return {
-        "data": base64.b64encode(login_instructions.encode()).decode("utf-8"),
-        "mimeType": "text/plain",
-        "authUrl": auth_url,
-        "appId": auth_manager.app_id
-    }
-
 # Generic wrapper for all Meta API tools
 def meta_api_tool(func):
     """Decorator to handle authentication for all Meta API tools"""
