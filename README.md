@@ -21,7 +21,36 @@ A [Model Calling Protocol (MCP)](https://github.com/anthropics/anthropic-tools) 
 4. Configure your app's OAuth redirect URI to include `http://localhost:8888/callback`
 5. Note your App ID (Client ID) for use with the MCP
 
-### 2. Install Dependencies
+### 2. Install the Package
+
+#### Using uv (Recommended)
+
+Install directly from GitHub:
+
+```bash
+uv pip install git+https://github.com/nictuku/meta-ads-mcp.git
+```
+
+Or if you've cloned the repository:
+
+```bash
+# From the repository root
+uv pip install -e .
+```
+
+#### Using pip
+
+```bash
+pip install git+https://github.com/nictuku/meta-ads-mcp.git
+```
+
+### 3. Install Dependencies (If installing from source)
+
+```bash
+uv pip install -r requirements.txt
+```
+
+Or:
 
 ```bash
 pip install -r requirements.txt

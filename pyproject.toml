@@ -1,11 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "meta-ads-mcp"
 version = "0.1.0"
-description = "Add your description here"
+description = "Model Calling Protocol (MCP) plugin for interacting with Meta Ads API"
 readme = "README.md"
 requires-python = ">=3.11"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"},
+]
+keywords = ["meta", "facebook", "ads", "api", "mcp", "claude"]
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
 dependencies = [
+    "httpx>=0.26.0",
     "mcp[cli]>=1.6.0",
     "python-dotenv>=1.1.0",
     "requests>=2.32.3",
+    "Pillow>=10.0.0",
+    "pathlib>=1.0.1",
 ]
+
+[project.urls]
+"Homepage" = "https://github.com/nictuku/meta-ads-mcp"
+"Bug Tracker" = "https://github.com/nictuku/meta-ads-mcp/issues"
+
+[project.scripts]
+meta-ads-login = "meta_ads_mcp.meta_ads_generated:login_cli"
+meta-ads-watch = "meta_ads_mcp.meta_ads_watch:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["meta_ads_mcp"]
