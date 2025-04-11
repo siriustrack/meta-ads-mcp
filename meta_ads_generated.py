@@ -422,7 +422,7 @@ async def get_ad_details(access_token: str, ad_id: str) -> str:
 @mcp_server.tool()
 async def get_ad_creatives(access_token: str, ad_id: str) -> str:
     """
-    Get creative details for a specific ad.
+    Get creative details for a specific ad. Best if combined with get_ad_image to get the full image.
     
     Args:
         access_token: Meta API access token
@@ -569,16 +569,18 @@ async def get_ad_creatives(access_token: str, ad_id: str) -> str:
     return json.dumps(creative_data, indent=2)
 
 @mcp_server.tool()
-async def download_ad_creative_image(access_token: str, ad_id: str, output_path: str = "ad_creatives") -> str:
+async def get_ad_image(access_token: str, ad_id: str) -> Image:
     """
-    Download and save the creative image for a specific ad.
+    Get, download, and visualize a Meta ad image in one step. Useful to see the image in the LLM.
     
     Args:
         access_token: Meta API access token
         ad_id: Meta Ads ad ID
-        output_path: Path to save the image (default: 'ad_creatives')
+    
+    Returns:
+        The ad image ready for direct visual analysis
     """
-    print(f"Attempting to download creative image for ad {ad_id}")
+    print(f"Attempting to get and analyze creative image for ad {ad_id}")
     
     # First, get creative and account IDs
     ad_endpoint = f"{ad_id}"
@@ -589,33 +591,21 @@ async def download_ad_creative_image(access_token: str, ad_id: str, output_path:
     ad_data = await make_api_request(ad_endpoint, access_token, ad_params)
     
     if "error" in ad_data:
-        return json.dumps({
-            "error": "Could not get ad data",
-            "details": ad_data
-        }, indent=2)
+        return f"Error: Could not get ad data - {json.dumps(ad_data)}"
     
     # Extract account_id
     account_id = ad_data.get("account_id", "")
     if not account_id:
-        return json.dumps({
-            "error": "No account ID found",
-            "details": ad_data
-        }, indent=2)
+        return "Error: No account ID found"
     
     # Extract creative ID
     if "creative" not in ad_data:
-        return json.dumps({
-            "error": "No creative found for this ad",
-            "details": ad_data
-        }, indent=2)
+        return "Error: No creative found for this ad"
         
     creative_data = ad_data.get("creative", {})
     creative_id = creative_data.get("id")
     if not creative_id:
-        return json.dumps({
-            "error": "No creative ID found",
-            "details": ad_data
-        }, indent=2)
+        return "Error: No creative ID found"
     
     # Get creative details to find image hash
     creative_endpoint = f"{creative_id}"
@@ -651,15 +641,11 @@ async def download_ad_creative_image(access_token: str, ad_id: str, output_path:
                 image_hashes.append(images[0]["hash"])
     
     if not image_hashes:
-        return json.dumps({
-            "error": "No image hashes found in creative",
-            "creative_data": creative_details,
-            "full_creative": creative_data
-        }, indent=2)
+        return "Error: No image hashes found in creative"
     
     print(f"Found image hashes: {image_hashes}")
     
-    # Now fetch image data using adimages endpoint with specific format based on successful curl test
+    # Now fetch image data using adimages endpoint with specific format
     image_endpoint = f"act_{account_id}/adimages"
     
     # Format the hashes parameter exactly as in our successful curl test
@@ -674,26 +660,17 @@ async def download_ad_creative_image(access_token: str, ad_id: str, output_path:
     image_data = await make_api_request(image_endpoint, access_token, image_params)
     
     if "error" in image_data:
-        return json.dumps({
-            "error": "Failed to get image data",
-            "details": image_data
-        }, indent=2)
+        return f"Error: Failed to get image data - {json.dumps(image_data)}"
     
     if "data" not in image_data or not image_data["data"]:
-        return json.dumps({
-            "error": "No image data returned from API",
-            "api_response": image_data
-        }, indent=2)
+        return "Error: No image data returned from API"
     
     # Get the first image URL
     first_image = image_data["data"][0]
     image_url = first_image.get("url")
     
     if not image_url:
-        return json.dumps({
-            "error": "No valid image URL found",
-            "image_data": image_data
-        }, indent=2)
+        return "Error: No valid image URL found"
     
     print(f"Downloading image from URL: {image_url}")
     
@@ -701,40 +678,26 @@ async def download_ad_creative_image(access_token: str, ad_id: str, output_path:
     image_bytes = await download_image(image_url)
     
     if not image_bytes:
-        # If download failed, provide detailed error
-        return json.dumps({
-            "error": "Failed to download image",
-            "image_url": image_url,
-            "details": "Failed to download image from the URL provided by the API."
-        }, indent=2)
+        return "Error: Failed to download image"
     
-    # Store the image data in our global dictionary with the ad_id as key
-    resource_id = f"ad_creative_{ad_id}"
-    resource_uri = f"meta-ads://images/{resource_id}"
-    ad_creative_images[resource_id] = {
-        "data": image_bytes,
-        "mime_type": "image/jpeg",
-        "name": f"Ad Creative for {ad_id}"
-    }
-    
-    # Save to local file if needed
-    os.makedirs(output_path, exist_ok=True)
-    image_filename = f"{output_path}/ad_{ad_id}_image.jpg"
-    with open(image_filename, "wb") as f:
-        f.write(image_bytes)
-    
-    # Encode the image as base64 for inline display
-    base64_data = base64.b64encode(image_bytes).decode("utf-8")
-    
-    return json.dumps({
-        "success": True,
-        "resource_uri": resource_uri,
-        "image_url": image_url,
-        "local_path": image_filename,
-        "image_details": first_image,
-        "image_size_bytes": len(image_bytes),
-        "base64_image": base64_data[:1000] + "..." if len(base64_data) > 1000 else base64_data
-    }, indent=2)
+    try:
+        # Convert bytes to PIL Image
+        img = PILImage.open(io.BytesIO(image_bytes))
+        
+        # Convert to RGB if needed
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+            
+        # Create a byte stream of the image data
+        byte_arr = io.BytesIO()
+        img.save(byte_arr, format="JPEG")
+        img_bytes = byte_arr.getvalue()
+        
+        # Return as an Image object that LLM can directly analyze
+        return Image(data=img_bytes, format="jpeg")
+        
+    except Exception as e:
+        return f"Error processing image: {str(e)}"
 
 # Resource Handling
 @mcp_server.resource(uri="meta-ads://resources")
@@ -1166,171 +1129,6 @@ async def save_ad_image_via_api(access_token: str, ad_id: str) -> str:
         result["message"] = "Failed to retrieve ad image through any API method"
         
     return json.dumps(result, indent=2)
-
-@mcp_server.tool()
-def analyze_ad_creative_image(image_path: str) -> Image:
-    """
-    Open and analyze a local ad creative image previously downloaded with download_ad_creative_image.
-    This returns the image directly to the LLM for visual analysis.
-    
-    Args:
-        image_path: Path to the local image file (e.g., ad_creatives/ad_123456789_image.jpg)
-    
-    Returns:
-        The image for direct LLM analysis
-    """
-    try:
-        # Open the image file using PIL
-        img = PILImage.open(image_path)
-        
-        # Convert to RGB if needed (in case of RGBA, etc.)
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-            
-        # Create a byte stream of the image data
-        byte_arr = io.BytesIO()
-        img.save(byte_arr, format="JPEG")
-        img_bytes = byte_arr.getvalue()
-        
-        # Return as an Image object that LLM can directly analyze
-        return Image(data=img_bytes, format="jpeg")
-        
-    except Exception as e:
-        # Return an error message if something goes wrong
-        return f"Error analyzing image: {str(e)}"
-
-@mcp_server.tool()
-async def get_ad_image(access_token: str, ad_id: str) -> Image:
-    """
-    Get, download, and analyze a Meta ad image in one step.
-    This tool combines the functionality of get_ad_creatives, download_ad_creative_image, 
-    and analyze_ad_creative_image into a single operation.
-    
-    Args:
-        access_token: Meta API access token
-        ad_id: Meta Ads ad ID
-    
-    Returns:
-        The ad image ready for direct visual analysis
-    """
-    print(f"Attempting to get and analyze creative image for ad {ad_id}")
-    
-    # First, get creative and account IDs
-    ad_endpoint = f"{ad_id}"
-    ad_params = {
-        "fields": "creative{id},account_id"
-    }
-    
-    ad_data = await make_api_request(ad_endpoint, access_token, ad_params)
-    
-    if "error" in ad_data:
-        return f"Error: Could not get ad data - {json.dumps(ad_data)}"
-    
-    # Extract account_id
-    account_id = ad_data.get("account_id", "")
-    if not account_id:
-        return "Error: No account ID found"
-    
-    # Extract creative ID
-    if "creative" not in ad_data:
-        return "Error: No creative found for this ad"
-        
-    creative_data = ad_data.get("creative", {})
-    creative_id = creative_data.get("id")
-    if not creative_id:
-        return "Error: No creative ID found"
-    
-    # Get creative details to find image hash
-    creative_endpoint = f"{creative_id}"
-    creative_params = {
-        "fields": "id,name,image_hash,asset_feed_spec"
-    }
-    
-    creative_details = await make_api_request(creative_endpoint, access_token, creative_params)
-    
-    # Identify image hashes to use from creative
-    image_hashes = []
-    
-    # Check for direct image_hash on creative
-    if "image_hash" in creative_details:
-        image_hashes.append(creative_details["image_hash"])
-    
-    # Check asset_feed_spec for image hashes - common in Advantage+ ads
-    if "asset_feed_spec" in creative_details and "images" in creative_details["asset_feed_spec"]:
-        for image in creative_details["asset_feed_spec"]["images"]:
-            if "hash" in image:
-                image_hashes.append(image["hash"])
-    
-    if not image_hashes:
-        # If no hashes found, try to extract from the first creative we found in the API
-        # Get creative for ad to try to extract hash
-        creative_json = await get_ad_creatives(access_token, ad_id)
-        creative_data = json.loads(creative_json)
-        
-        # Try to extract hash from asset_feed_spec
-        if "asset_feed_spec" in creative_data and "images" in creative_data["asset_feed_spec"]:
-            images = creative_data["asset_feed_spec"]["images"]
-            if images and len(images) > 0 and "hash" in images[0]:
-                image_hashes.append(images[0]["hash"])
-    
-    if not image_hashes:
-        return "Error: No image hashes found in creative"
-    
-    print(f"Found image hashes: {image_hashes}")
-    
-    # Now fetch image data using adimages endpoint with specific format
-    image_endpoint = f"act_{account_id}/adimages"
-    
-    # Format the hashes parameter exactly as in our successful curl test
-    hashes_str = f'["{image_hashes[0]}"]'  # Format first hash only, as JSON string array
-    
-    image_params = {
-        "fields": "hash,url,width,height,name,status",
-        "hashes": hashes_str
-    }
-    
-    print(f"Requesting image data with params: {image_params}")
-    image_data = await make_api_request(image_endpoint, access_token, image_params)
-    
-    if "error" in image_data:
-        return f"Error: Failed to get image data - {json.dumps(image_data)}"
-    
-    if "data" not in image_data or not image_data["data"]:
-        return "Error: No image data returned from API"
-    
-    # Get the first image URL
-    first_image = image_data["data"][0]
-    image_url = first_image.get("url")
-    
-    if not image_url:
-        return "Error: No valid image URL found"
-    
-    print(f"Downloading image from URL: {image_url}")
-    
-    # Download the image
-    image_bytes = await download_image(image_url)
-    
-    if not image_bytes:
-        return "Error: Failed to download image"
-    
-    try:
-        # Convert bytes to PIL Image
-        img = PILImage.open(io.BytesIO(image_bytes))
-        
-        # Convert to RGB if needed
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-            
-        # Create a byte stream of the image data
-        byte_arr = io.BytesIO()
-        img.save(byte_arr, format="JPEG")
-        img_bytes = byte_arr.getvalue()
-        
-        # Return as an Image object that LLM can directly analyze
-        return Image(data=img_bytes, format="jpeg")
-        
-    except Exception as e:
-        return f"Error processing image: {str(e)}"
 
 if __name__ == "__main__":
     # Initialize and run the server
