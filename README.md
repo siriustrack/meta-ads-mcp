@@ -82,7 +82,7 @@ Before using the MCP server, you'll need to set up a Meta Developer App:
 uvx meta-ads-mcp
 
 # Authenticate with Meta Ads
-uvx meta-ads-login --app-id YOUR_APP_ID
+uvx meta-ads-mcp --login --app-id YOUR_APP_ID
 ```
 
 ### Authentication
@@ -110,20 +110,10 @@ There are two ways to authenticate with the Meta Ads API:
 
 2. **Command Line Authentication**
 
-   You can also initiate authentication directly from the command line:
+   You can authenticate directly from the command line:
 
    ```bash
-   uvx meta-ads-login --app-id YOUR_APP_ID
-   ```
-   
-   Or use the convenience scripts:
-   
-   ```bash
-   # On macOS/Linux
-   ./login.sh YOUR_APP_ID
-   
-   # On Windows
-   login.bat YOUR_APP_ID
+   uvx meta-ads-mcp --login --app-id YOUR_APP_ID
    ```
 
 ### Token Caching
@@ -228,7 +218,7 @@ If you encounter authentication issues:
    - Check that the callback server is running properly (the tool will report this)
 
 2. When using the command line:
-   - Run with `--force-login` to get a fresh token: `uvx meta-ads-login --app-id YOUR_APP_ID --force-login`
+   - Run with `--force-login` to get a fresh token: `uvx meta-ads-mcp --login --app-id YOUR_APP_ID --force-login`
    - Make sure the terminal has permissions to open a browser window
 
 3. General authentication troubleshooting:
