@@ -29,28 +29,44 @@ pip install -r requirements.txt
 
 ## Authentication
 
-The Meta Ads MCP uses the OAuth 2.0 flow designed for desktop apps. The first time you use it, it will:
+The Meta Ads MCP uses the OAuth 2.0 flow designed for desktop apps. When authenticating, it will:
 
-1. Open a browser window to authenticate with Meta
-2. Ask you to authorize the app
-3. Redirect back to a local server running on your machine
-4. Extract and store the token securely
+1. Start a local callback server on your machine
+2. Open a browser window to authenticate with Meta
+3. Ask you to authorize the app
+4. Redirect back to the local server to extract and store the token securely
 
-### Initial Authentication
+### Authentication Methods
 
-You can trigger the authentication process in two ways:
+There are two ways to authenticate with the Meta Ads API:
 
-1. Using the dedicated login command:
+1. **LLM/MCP Interface Authentication** (Recommended)
+   
+   When using the Meta Ads MCP through an LLM interface (like Claude), simply use any Meta Ads function. If you're not authenticated, the system will automatically provide a clickable Markdown link to complete the authentication flow.
 
-```bash
-python meta_ads_generated.py --login --app-id YOUR_APP_ID
-```
+   ```
+   [Click here to authenticate with Meta Ads API](https://www.facebook.com/dialog/oauth?...)
+   ```
 
-2. Or by running any command which will automatically prompt for authentication if needed:
+   Just click the link, complete the authorization in your browser, and the token will be automatically captured and stored.
 
-```bash
-python test_meta_ads_auth.py --app-id YOUR_APP_ID
-```
+2. **Command Line Authentication**
+
+   You can also initiate authentication directly from the command line:
+
+   ```bash
+   python meta_ads_generated.py --login --app-id YOUR_APP_ID
+   ```
+   
+   Or use the convenience scripts:
+   
+   ```bash
+   # On macOS/Linux
+   ./login.sh YOUR_APP_ID
+   
+   # On Windows
+   login.bat YOUR_APP_ID
+   ```
 
 ### Token Caching
 
@@ -124,6 +140,8 @@ You can set the following environment variables instead of passing them as argum
 
 ## Testing
 
+### CLI Testing
+
 Run the test script to verify authentication and basic functionality:
 
 ```bash
@@ -136,16 +154,36 @@ Use the `--force-login` flag to force a new authentication even if a cached toke
 python test_meta_ads_auth.py --app-id YOUR_APP_ID --force-login
 ```
 
+### LLM Interface Testing
+
+When using the Meta Ads MCP with an LLM interface (like Claude):
+
+1. Test authentication by calling the `get_login_link` tool
+2. Verify account access by calling `get_ad_accounts`
+3. Check specific account details with `get_account_info`
+
+These functions will automatically handle authentication if needed and provide a clickable login link.
+
 ## Troubleshooting
 
 ### Authentication Issues
 
 If you encounter authentication issues:
 
-1. Run with `--force-login` to get a fresh token
-2. Check that your app is properly configured in the Meta Developers portal
-3. Ensure your app has the necessary permissions (ads_management, ads_read)
-4. Check the app's redirect URI includes http://localhost:8888/callback
+1. When using the LLM interface:
+   - Use the `get_login_link` tool to generate a fresh authentication link
+   - Ensure you click the link and complete the authorization flow in your browser
+   - Check that the callback server is running properly (the tool will report this)
+
+2. When using the command line:
+   - Run with `--force-login` to get a fresh token: `python meta_ads_generated.py --login --app-id YOUR_APP_ID --force-login`
+   - Make sure the terminal has permissions to open a browser window
+
+3. General authentication troubleshooting:
+   - Check that your app is properly configured in the Meta Developers portal
+   - Ensure your app has the necessary permissions (ads_management, ads_read, business_management)
+   - Verify the app's redirect URI includes `http://localhost:8888/callback`
+   - Try clearing the token cache (located in platform-specific directories listed in the Token Caching section)
 
 ### API Errors
 
