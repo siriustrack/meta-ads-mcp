@@ -4,6 +4,8 @@ import json
 import os
 import base64
 from mcp.server.fastmcp import FastMCP
+import datetime
+from urllib.parse import urlparse
 
 # Initialize FastMCP server
 mcp_server = FastMCP("meta-ads-generated")
@@ -94,19 +96,87 @@ async def download_image(url: str) -> Optional[bytes]:
         Image data as bytes if successful, None otherwise
     """
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=30.0)
-            response.raise_for_status()
-            return response.content
+        print(f"Attempting to download image from URL: {url}")
+        
+        # Use minimal headers like curl does
+        headers = {
+            "User-Agent": "curl/8.4.0",
+            "Accept": "*/*"
+        }
+        
+        # Ensure the URL is properly escaped
+        # But don't modify the already encoded parameters
+        
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            # Simple GET request just like curl
+            response = await client.get(url, headers=headers)
+            
+            # Check response
+            if response.status_code == 200:
+                print(f"Successfully downloaded image: {len(response.content)} bytes")
+                return response.content
+            else:
+                print(f"Failed to download image: HTTP {response.status_code}")
+                return None
+                
     except httpx.HTTPStatusError as e:
-        print(f"HTTP Error: {e.response.status_code} - {str(e)}")
+        print(f"HTTP Error when downloading image: {e}")
         return None
     except httpx.RequestError as e:
-        print(f"Request Error: {str(e)}")
+        print(f"Request Error when downloading image: {e}")
         return None
     except Exception as e:
-        print(f"Error downloading image: {str(e)}")
+        print(f"Unexpected error downloading image: {e}")
         return None
+
+# Add a new helper function to try different download methods
+async def try_multiple_download_methods(url: str) -> Optional[bytes]:
+    """
+    Try multiple methods to download an image, with different approaches for Meta CDN.
+    
+    Args:
+        url: Image URL
+        
+    Returns:
+        Image data as bytes if successful, None otherwise
+    """
+    # Method 1: Direct download with custom headers
+    image_data = await download_image(url)
+    if image_data:
+        return image_data
+    
+    print("Direct download failed, trying alternative methods...")
+    
+    # Method 2: Try adding Facebook cookie simulation
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+            "Cookie": "presence=EDvF3EtimeF1697900316EuserFA21B00112233445566AA0EstateFDutF0CEchF_7bCC"  # Fake cookie
+        }
+        
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            response = await client.get(url, headers=headers, timeout=30.0)
+            response.raise_for_status()
+            print(f"Method 2 succeeded with cookie simulation: {len(response.content)} bytes")
+            return response.content
+    except Exception as e:
+        print(f"Method 2 failed: {str(e)}")
+    
+    # Method 3: Try with session that keeps redirects and cookies
+    try:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            # First visit Facebook to get cookies
+            await client.get("https://www.facebook.com/", timeout=30.0)
+            # Then try the image URL
+            response = await client.get(url, timeout=30.0)
+            response.raise_for_status()
+            print(f"Method 3 succeeded with Facebook session: {len(response.content)} bytes")
+            return response.content
+    except Exception as e:
+        print(f"Method 3 failed: {str(e)}")
+    
+    return None
 
 #
 # Ad Account Endpoints
@@ -506,95 +576,162 @@ async def download_ad_creative_image(access_token: str, ad_id: str, output_path:
         ad_id: Meta Ads ad ID
         output_path: Path to save the image (default: 'ad_creatives')
     """
-    # First, get the account_id - this is needed for some advanced image queries
-    endpoint = f"{ad_id}"
-    params = {
-        "fields": "account_id"
+    print(f"Attempting to download creative image for ad {ad_id}")
+    
+    # First, get creative and account IDs
+    ad_endpoint = f"{ad_id}"
+    ad_params = {
+        "fields": "creative{id},account_id"
     }
     
-    ad_data = await make_api_request(endpoint, access_token, params)
-    account_id = ad_data.get('account_id', '')
+    ad_data = await make_api_request(ad_endpoint, access_token, ad_params)
     
-    # Get the creative details first
-    creative_json = await get_ad_creatives(access_token, ad_id)
-    creative_data = json.loads(creative_json)
+    if "error" in ad_data:
+        return json.dumps({
+            "error": "Could not get ad data",
+            "details": ad_data
+        }, indent=2)
     
-    # Look for image URLs in the response
-    image_url = None
-    if "full_image_url" in creative_data:
-        image_url = creative_data.get("full_image_url")
-    elif "image_url" in creative_data:
-        image_url = creative_data.get("image_url")
-    elif "thumbnail_url" in creative_data:
-        image_url = creative_data.get("thumbnail_url")
-    elif "object_story_spec" in creative_data:
-        spec = creative_data.get("object_story_spec", {})
-        if "link_data" in spec and "image_url" in spec["link_data"]:
-            image_url = spec["link_data"].get("image_url")
-        elif "link_data" in spec and "image_hash" in spec["link_data"]:
-            # Get image from hash
-            image_hash = spec["link_data"].get("image_hash")
-            image_endpoint = f"act_{account_id}/adimages"
-            image_params = {
-                "hashes": [image_hash]
-            }
-            image_data = await make_api_request(image_endpoint, access_token, image_params)
-            if "data" in image_data and len(image_data["data"]) > 0:
-                image_url = image_data["data"][0].get("url")
+    # Extract account_id
+    account_id = ad_data.get("account_id", "")
+    if not account_id:
+        return json.dumps({
+            "error": "No account ID found",
+            "details": ad_data
+        }, indent=2)
     
-    # If we still don't have an image URL, try the adimages endpoint directly
-    if not image_url and "asset_feed_spec" in creative_data and "images" in creative_data["asset_feed_spec"]:
-        images = creative_data["asset_feed_spec"]["images"]
-        if images and len(images) > 0 and "hash" in images[0]:
-            image_hash = images[0]["hash"]
-            image_endpoint = f"act_{account_id}/adimages"
-            image_params = {
-                "hashes": [image_hash]
-            }
-            image_data = await make_api_request(image_endpoint, access_token, image_params)
-            if "data" in image_data and len(image_data["data"]) > 0:
-                image_url = image_data["data"][0].get("url")
+    # Extract creative ID
+    if "creative" not in ad_data:
+        return json.dumps({
+            "error": "No creative found for this ad",
+            "details": ad_data
+        }, indent=2)
+        
+    creative_data = ad_data.get("creative", {})
+    creative_id = creative_data.get("id")
+    if not creative_id:
+        return json.dumps({
+            "error": "No creative ID found",
+            "details": ad_data
+        }, indent=2)
+    
+    # Get creative details to find image hash
+    creative_endpoint = f"{creative_id}"
+    creative_params = {
+        "fields": "id,name,image_hash,asset_feed_spec"
+    }
+    
+    creative_details = await make_api_request(creative_endpoint, access_token, creative_params)
+    
+    # Identify image hashes to use from creative
+    image_hashes = []
+    
+    # Check for direct image_hash on creative
+    if "image_hash" in creative_details:
+        image_hashes.append(creative_details["image_hash"])
+    
+    # Check asset_feed_spec for image hashes - common in Advantage+ ads
+    if "asset_feed_spec" in creative_details and "images" in creative_details["asset_feed_spec"]:
+        for image in creative_details["asset_feed_spec"]["images"]:
+            if "hash" in image:
+                image_hashes.append(image["hash"])
+    
+    if not image_hashes:
+        # If no hashes found, try to extract from the first creative we found in the API
+        # Get creative for ad to try to extract hash
+        creative_json = await get_ad_creatives(access_token, ad_id)
+        creative_data = json.loads(creative_json)
+        
+        # Try to extract hash from asset_feed_spec
+        if "asset_feed_spec" in creative_data and "images" in creative_data["asset_feed_spec"]:
+            images = creative_data["asset_feed_spec"]["images"]
+            if images and len(images) > 0 and "hash" in images[0]:
+                image_hashes.append(images[0]["hash"])
+    
+    if not image_hashes:
+        return json.dumps({
+            "error": "No image hashes found in creative",
+            "creative_data": creative_details,
+            "full_creative": creative_data
+        }, indent=2)
+    
+    print(f"Found image hashes: {image_hashes}")
+    
+    # Now fetch image data using adimages endpoint with specific format based on successful curl test
+    image_endpoint = f"act_{account_id}/adimages"
+    
+    # Format the hashes parameter exactly as in our successful curl test
+    hashes_str = f'["{image_hashes[0]}"]'  # Format first hash only, as JSON string array
+    
+    image_params = {
+        "fields": "hash,url,width,height,name,status",
+        "hashes": hashes_str
+    }
+    
+    print(f"Requesting image data with params: {image_params}")
+    image_data = await make_api_request(image_endpoint, access_token, image_params)
+    
+    if "error" in image_data:
+        return json.dumps({
+            "error": "Failed to get image data",
+            "details": image_data
+        }, indent=2)
+    
+    if "data" not in image_data or not image_data["data"]:
+        return json.dumps({
+            "error": "No image data returned from API",
+            "api_response": image_data
+        }, indent=2)
+    
+    # Get the first image URL
+    first_image = image_data["data"][0]
+    image_url = first_image.get("url")
     
     if not image_url:
         return json.dumps({
-            "error": "No image URL found in creative",
-            "creative_data": creative_data
+            "error": "No valid image URL found",
+            "image_data": image_data
         }, indent=2)
     
-    # Try to convert the URL to get higher resolution by removing size parameters
-    if "p64x64" in image_url:
-        image_url = image_url.replace("p64x64", "p1080x1080")
-    elif "dst-emg0" in image_url:
-        # Remove the dst-emg0 parameter that seems to reduce size
-        image_url = image_url.replace("dst-emg0_", "")
+    print(f"Downloading image from URL: {image_url}")
     
     # Download the image
-    image_data = await download_image(image_url)
-    if not image_data:
+    image_bytes = await download_image(image_url)
+    
+    if not image_bytes:
+        # If download failed, provide detailed error
         return json.dumps({
             "error": "Failed to download image",
             "image_url": image_url,
-            "details": "Unable to download image. This might be due to authentication requirements, URL expiration, or content restrictions imposed by Meta. Consider accessing the image through the Meta Ads Manager interface."
+            "details": "Failed to download image from the URL provided by the API."
         }, indent=2)
     
     # Store the image data in our global dictionary with the ad_id as key
     resource_id = f"ad_creative_{ad_id}"
     resource_uri = f"meta-ads://images/{resource_id}"
     ad_creative_images[resource_id] = {
-        "data": image_data,
+        "data": image_bytes,
         "mime_type": "image/jpeg",
         "name": f"Ad Creative for {ad_id}"
     }
     
+    # Save to local file if needed
+    os.makedirs(output_path, exist_ok=True)
+    image_filename = f"{output_path}/ad_{ad_id}_image.jpg"
+    with open(image_filename, "wb") as f:
+        f.write(image_bytes)
+    
     # Encode the image as base64 for inline display
-    base64_data = base64.b64encode(image_data).decode("utf-8")
+    base64_data = base64.b64encode(image_bytes).decode("utf-8")
     
     return json.dumps({
         "success": True,
         "resource_uri": resource_uri,
         "image_url": image_url,
-        "creative_data": creative_data,
-        "base64_image": base64_data
+        "local_path": image_filename,
+        "image_details": first_image,
+        "image_size_bytes": len(image_bytes),
+        "base64_image": base64_data[:1000] + "..." if len(base64_data) > 1000 else base64_data
     }, indent=2)
 
 # Resource Handling
@@ -661,6 +798,372 @@ async def get_insights(
     data = await make_api_request(endpoint, access_token, params)
     
     return json.dumps(data, indent=2)
+
+@mcp_server.tool()
+async def debug_image_download(access_token: str, url: str = "", ad_id: str = "") -> str:
+    """
+    Debug image download issues and report detailed diagnostics.
+    
+    Args:
+        access_token: Meta API access token
+        url: Direct image URL to test (optional)
+        ad_id: Meta Ads ad ID (optional, used if url is not provided)
+    """
+    results = {
+        "diagnostics": {
+            "timestamp": str(datetime.datetime.now()),
+            "methods_tried": [],
+            "request_details": [],
+            "network_info": {}
+        }
+    }
+    
+    # If no URL provided but ad_id is, get URL from ad creative
+    if not url and ad_id:
+        print(f"Getting image URL from ad creative for ad {ad_id}")
+        # Get the creative details
+        creative_json = await get_ad_creatives(access_token, ad_id)
+        creative_data = json.loads(creative_json)
+        results["creative_data"] = creative_data
+        
+        # Look for image URL in the creative
+        if "full_image_url" in creative_data:
+            url = creative_data.get("full_image_url")
+        elif "thumbnail_url" in creative_data:
+            url = creative_data.get("thumbnail_url")
+    
+    if not url:
+        return json.dumps({
+            "error": "No image URL provided or found in ad creative",
+            "results": results
+        }, indent=2)
+    
+    results["image_url"] = url
+    print(f"Debug: Testing image URL: {url}")
+    
+    # Try to get network information to help debug
+    try:
+        import socket
+        hostname = urlparse(url).netloc
+        ip_address = socket.gethostbyname(hostname)
+        results["diagnostics"]["network_info"] = {
+            "hostname": hostname,
+            "ip_address": ip_address,
+            "is_facebook_cdn": "fbcdn" in hostname
+        }
+    except Exception as e:
+        results["diagnostics"]["network_info"] = {
+            "error": str(e)
+        }
+    
+    # Method 1: Basic download
+    method_result = {
+        "method": "Basic download with standard headers",
+        "success": False
+    }
+    results["diagnostics"]["methods_tried"].append(method_result)
+    
+    try:
+        headers = {
+            "User-Agent": USER_AGENT
+        }
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            response = await client.get(url, headers=headers, timeout=30.0)
+            method_result["status_code"] = response.status_code
+            method_result["headers"] = dict(response.headers)
+            
+            if response.status_code == 200:
+                method_result["success"] = True
+                method_result["content_length"] = len(response.content)
+                method_result["content_type"] = response.headers.get("content-type")
+                
+                # Save this successful result
+                results["image_data"] = {
+                    "length": len(response.content),
+                    "type": response.headers.get("content-type"),
+                    "base64_sample": base64.b64encode(response.content[:100]).decode("utf-8") + "..." if response.content else None
+                }
+    except Exception as e:
+        method_result["error"] = str(e)
+    
+    # Method 2: Browser emulation
+    method_result = {
+        "method": "Browser emulation with cookies",
+        "success": False
+    }
+    results["diagnostics"]["methods_tried"].append(method_result)
+    
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.facebook.com/",
+            "Cookie": "presence=EDvF3EtimeF1697900316EuserFA21B00112233445566AA0EstateFDutF0CEchF_7bCC"
+        }
+        
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            response = await client.get(url, headers=headers, timeout=30.0)
+            method_result["status_code"] = response.status_code
+            method_result["headers"] = dict(response.headers)
+            
+            if response.status_code == 200:
+                method_result["success"] = True
+                method_result["content_length"] = len(response.content)
+                method_result["content_type"] = response.headers.get("content-type")
+                
+                # If first method didn't succeed, save this successful result
+                if "image_data" not in results:
+                    results["image_data"] = {
+                        "length": len(response.content),
+                        "type": response.headers.get("content-type"),
+                        "base64_sample": base64.b64encode(response.content[:100]).decode("utf-8") + "..." if response.content else None
+                    }
+    except Exception as e:
+        method_result["error"] = str(e)
+    
+    # Method 3: Graph API direct access (if applicable)
+    if "fbcdn" in url or "facebook" in url:
+        method_result = {
+            "method": "Graph API direct access",
+            "success": False
+        }
+        results["diagnostics"]["methods_tried"].append(method_result)
+        
+        try:
+            # Try to reconstruct the attachment ID from URL if possible
+            url_parts = url.split("/")
+            potential_ids = [part for part in url_parts if part.isdigit() and len(part) > 10]
+            
+            if ad_id and potential_ids:
+                attachment_id = potential_ids[0]
+                endpoint = f"{attachment_id}?fields=url,width,height"
+                api_result = await make_api_request(endpoint, access_token)
+                
+                method_result["api_response"] = api_result
+                
+                if "url" in api_result:
+                    graph_url = api_result["url"]
+                    method_result["graph_url"] = graph_url
+                    
+                    # Try to download from this Graph API URL
+                    async with httpx.AsyncClient() as client:
+                        response = await client.get(graph_url, timeout=30.0)
+                        
+                        method_result["status_code"] = response.status_code
+                        if response.status_code == 200:
+                            method_result["success"] = True
+                            method_result["content_length"] = len(response.content)
+                            
+                            # If previous methods didn't succeed, save this successful result
+                            if "image_data" not in results:
+                                results["image_data"] = {
+                                    "length": len(response.content),
+                                    "type": response.headers.get("content-type"),
+                                    "base64_sample": base64.b64encode(response.content[:100]).decode("utf-8") + "..." if response.content else None
+                                }
+        except Exception as e:
+            method_result["error"] = str(e)
+    
+    # Generate a recommendation based on what we found
+    if "image_data" in results:
+        results["recommendation"] = "At least one download method succeeded. Consider implementing the successful method in the main code."
+    else:
+        # Check if the error appears to be access-related
+        access_errors = False
+        for method in results["diagnostics"]["methods_tried"]:
+            if method.get("status_code") in [401, 403, 503]:
+                access_errors = True
+                
+        if access_errors:
+            results["recommendation"] = "Authentication or authorization errors detected. Images may require direct Facebook authentication not possible via API."
+        else:
+            results["recommendation"] = "Network or other technical errors detected. Check URL expiration or CDN restrictions."
+    
+    return json.dumps(results, indent=2)
+
+@mcp_server.tool()
+async def save_ad_image_via_api(access_token: str, ad_id: str) -> str:
+    """
+    Try to save an ad image by using the Marketing API's attachment endpoints.
+    This is an alternative approach when direct image download fails.
+    
+    Args:
+        access_token: Meta API access token
+        ad_id: Meta Ads ad ID
+    """
+    # First get the ad's creative ID
+    ad_endpoint = f"{ad_id}"
+    ad_params = {
+        "fields": "creative,account_id"
+    }
+    
+    ad_data = await make_api_request(ad_endpoint, access_token, ad_params)
+    
+    if "error" in ad_data:
+        return json.dumps({
+            "error": "Could not get ad data",
+            "details": ad_data
+        }, indent=2)
+    
+    if "creative" not in ad_data or "id" not in ad_data["creative"]:
+        return json.dumps({
+            "error": "No creative ID found for this ad",
+            "ad_data": ad_data
+        }, indent=2)
+    
+    creative_id = ad_data["creative"]["id"]
+    account_id = ad_data.get("account_id", "")
+    
+    # Now get the creative object
+    creative_endpoint = f"{creative_id}"
+    creative_params = {
+        "fields": "id,name,thumbnail_url,image_hash,asset_feed_spec"
+    }
+    
+    creative_data = await make_api_request(creative_endpoint, access_token, creative_params)
+    
+    if "error" in creative_data:
+        return json.dumps({
+            "error": "Could not get creative data",
+            "details": creative_data
+        }, indent=2)
+    
+    # Approach 1: Try to get image through adimages endpoint if we have image_hash
+    image_hash = None
+    if "image_hash" in creative_data:
+        image_hash = creative_data["image_hash"]
+    elif "asset_feed_spec" in creative_data and "images" in creative_data["asset_feed_spec"] and len(creative_data["asset_feed_spec"]["images"]) > 0:
+        image_hash = creative_data["asset_feed_spec"]["images"][0].get("hash")
+    
+    result = {
+        "ad_id": ad_id,
+        "creative_id": creative_id,
+        "attempts": []
+    }
+    
+    if image_hash and account_id:
+        attempt = {
+            "method": "adimages endpoint with hash",
+            "success": False
+        }
+        result["attempts"].append(attempt)
+        
+        try:
+            image_endpoint = f"act_{account_id}/adimages"
+            image_params = {
+                "hashes": [image_hash]
+            }
+            image_data = await make_api_request(image_endpoint, access_token, image_params)
+            attempt["response"] = image_data
+            
+            if "data" in image_data and len(image_data["data"]) > 0 and "url" in image_data["data"][0]:
+                url = image_data["data"][0]["url"]
+                attempt["url"] = url
+                
+                # Try to download the image
+                image_bytes = await download_image(url)
+                if image_bytes:
+                    attempt["success"] = True
+                    attempt["image_size"] = len(image_bytes)
+                    
+                    # Save the image
+                    resource_id = f"ad_creative_{ad_id}_method1"
+                    resource_uri = f"meta-ads://images/{resource_id}"
+                    ad_creative_images[resource_id] = {
+                        "data": image_bytes,
+                        "mime_type": "image/jpeg",
+                        "name": f"Ad Creative for {ad_id} (Method 1)"
+                    }
+                    
+                    # Return success with resource info
+                    result["resource_uri"] = resource_uri
+                    result["success"] = True
+                    base64_sample = base64.b64encode(image_bytes[:100]).decode("utf-8") + "..."
+                    result["base64_sample"] = base64_sample
+        except Exception as e:
+            attempt["error"] = str(e)
+    
+    # Approach 2: Try directly with the thumbnails endpoint
+    attempt = {
+        "method": "thumbnails endpoint on creative",
+        "success": False
+    }
+    result["attempts"].append(attempt)
+    
+    try:
+        thumbnails_endpoint = f"{creative_id}/thumbnails"
+        thumbnails_params = {}
+        thumbnails_data = await make_api_request(thumbnails_endpoint, access_token, thumbnails_params)
+        attempt["response"] = thumbnails_data
+        
+        if "data" in thumbnails_data and len(thumbnails_data["data"]) > 0:
+            for thumbnail in thumbnails_data["data"]:
+                if "uri" in thumbnail:
+                    url = thumbnail["uri"]
+                    attempt["url"] = url
+                    
+                    # Try to download the image
+                    image_bytes = await download_image(url)
+                    if image_bytes:
+                        attempt["success"] = True
+                        attempt["image_size"] = len(image_bytes)
+                        
+                        # Save the image if method 1 didn't already succeed
+                        if "success" not in result or not result["success"]:
+                            resource_id = f"ad_creative_{ad_id}_method2"
+                            resource_uri = f"meta-ads://images/{resource_id}"
+                            ad_creative_images[resource_id] = {
+                                "data": image_bytes,
+                                "mime_type": "image/jpeg",
+                                "name": f"Ad Creative for {ad_id} (Method 2)"
+                            }
+                            
+                            # Return success with resource info
+                            result["resource_uri"] = resource_uri
+                            result["success"] = True
+                            base64_sample = base64.b64encode(image_bytes[:100]).decode("utf-8") + "..."
+                            result["base64_sample"] = base64_sample
+                        
+                        # No need to try more thumbnails if we succeeded
+                        break
+    except Exception as e:
+        attempt["error"] = str(e)
+    
+    # Approach 3: Try using the preview shareable link as an alternate source
+    attempt = {
+        "method": "preview_shareable_link",
+        "success": False
+    }
+    result["attempts"].append(attempt)
+    
+    try:
+        # Get ad details with preview link
+        ad_preview_endpoint = f"{ad_id}"
+        ad_preview_params = {
+            "fields": "preview_shareable_link"
+        }
+        ad_preview_data = await make_api_request(ad_preview_endpoint, access_token, ad_preview_params)
+        
+        if "preview_shareable_link" in ad_preview_data:
+            preview_link = ad_preview_data["preview_shareable_link"]
+            attempt["preview_link"] = preview_link
+            
+            # We can't directly download the preview image, but let's note it for manual inspection
+            attempt["note"] = "Preview link available for manual inspection in browser"
+            
+            # This approach doesn't actually download the image, but the link might be useful
+            # for debugging purposes or manual verification
+    except Exception as e:
+        attempt["error"] = str(e)
+    
+    # Overall result
+    if "success" in result and result["success"]:
+        result["message"] = "Successfully retrieved ad image through one of the API methods"
+    else:
+        result["message"] = "Failed to retrieve ad image through any API method"
+        
+    return json.dumps(result, indent=2)
 
 if __name__ == "__main__":
     # Initialize and run the server
