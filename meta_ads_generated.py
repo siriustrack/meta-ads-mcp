@@ -16,7 +16,7 @@ import argparse
 import asyncio
 
 # Initialize FastMCP server
-mcp_server = FastMCP("meta-ads-generated")
+mcp_server = FastMCP("meta-ads-generated", use_consistent_tool_format=True)
 
 # Constants
 META_GRAPH_API_VERSION = "v20.0"
@@ -462,6 +462,46 @@ This will open a browser window for authentication and cache the token.
 def meta_api_tool(func):
     """Decorator to handle authentication for all Meta API tools"""
     async def wrapper(*args, **kwargs):
+        # Handle various MCP invocation patterns
+        if len(args) == 1:
+            # MCP might pass a single string argument that contains JSON
+            if isinstance(args[0], str):
+                try:
+                    # Try to parse the single string argument as JSON dictionary
+                    parsed_kwargs = json.loads(args[0]) if args[0] else {}
+                    # Clear args and use parsed_kwargs
+                    args = ()
+                    kwargs.update(parsed_kwargs)
+                except Exception:
+                    pass
+            # MCP might also pass a single dictionary argument
+            elif isinstance(args[0], dict):
+                # Treat the dict as kwargs
+                kwargs.update(args[0])
+                args = ()
+        
+        # Check if we have a 'kwargs' parameter, which means MCP is nesting the real parameters
+        if 'kwargs' in kwargs and isinstance(kwargs['kwargs'], (str, dict)):
+            # If it's a string, try to parse as JSON
+            if isinstance(kwargs['kwargs'], str):
+                try:
+                    parsed_inner_kwargs = json.loads(kwargs['kwargs']) if kwargs['kwargs'] else {}
+                    kwargs.update(parsed_inner_kwargs)
+                except Exception:
+                    # If parsing fails, just keep the original kwargs
+                    pass
+            # If it's already a dict, just update kwargs
+            elif isinstance(kwargs['kwargs'], dict):
+                kwargs.update(kwargs['kwargs'])
+            
+            # Remove the 'kwargs' parameter to avoid confusion
+            del kwargs['kwargs']
+            
+        # Handle 'args' parameter if it exists
+        if 'args' in kwargs:
+            # We don't use positional args, so just remove it
+            del kwargs['args']
+        
         # Check if access_token is provided in kwargs
         access_token = kwargs.get('access_token')
         
@@ -488,7 +528,7 @@ def meta_api_tool(func):
         
         # Call the original function
         try:
-            result = await func(*args, **kwargs)
+            result = await func(**kwargs)
             
             # If authentication is needed after the call (e.g., token was invalidated)
             if needs_authentication:
