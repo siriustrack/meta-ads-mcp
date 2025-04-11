@@ -13,6 +13,7 @@ import time
 import platform
 import pathlib
 import argparse
+import asyncio
 
 # Initialize FastMCP server
 mcp_server = FastMCP("meta-ads-generated")
@@ -28,6 +29,10 @@ USER_AGENT = "meta-ads-mcp/1.0"
 # 3. User input during runtime
 META_APP_ID = "YOUR_META_APP_ID"  # Will be replaced at runtime
 
+# Try to load from environment variable
+if os.environ.get("META_APP_ID"):
+    META_APP_ID = os.environ.get("META_APP_ID")
+
 # Auth constants
 AUTH_SCOPE = "ads_management,ads_read,business_management"
 AUTH_REDIRECT_URI = "http://localhost:8888/callback"
@@ -35,6 +40,9 @@ AUTH_RESPONSE_TYPE = "token"
 
 # Global store for ad creative images
 ad_creative_images = {}
+
+# Global flag for authentication state
+needs_authentication = False
 
 # Authentication related classes
 class TokenInfo:
@@ -280,6 +288,10 @@ class AuthManager:
             # Save token to cache
             self._save_token_to_cache()
             
+            # Reset the need for authentication
+            global needs_authentication
+            needs_authentication = False
+            
             return self.token_info.access_token
         
         except Exception as e:
@@ -294,33 +306,42 @@ class AuthManager:
             Access token if available, None otherwise
         """
         if not self.token_info or self.token_info.is_expired():
-            return self.authenticate()
+            return None
         
         return self.token_info.access_token
+        
+    def invalidate_token(self) -> None:
+        """Invalidate the current token, usually because it has expired or is invalid"""
+        if self.token_info:
+            print(f"Invalidating token: {self.token_info.access_token[:10]}...")
+            self.token_info = None
+            
+            # Signal that authentication is needed
+            global needs_authentication
+            needs_authentication = True
+            
+            # Remove the cached token file
+            try:
+                cache_path = self._get_token_cache_path()
+                if cache_path.exists():
+                    os.remove(cache_path)
+                    print(f"Removed cached token file: {cache_path}")
+            except Exception as e:
+                print(f"Error removing cached token: {e}")
 
 
 # Initialize auth manager
 auth_manager = AuthManager(META_APP_ID)
 
 # Function to get token without requiring it as a parameter
-async def get_current_access_token() -> str:
+async def get_current_access_token() -> Optional[str]:
     """
-    Get the current access token, triggering authentication if needed
+    Get the current access token from cache
     
     Returns:
-        Current access token
-    
-    Raises:
-        ValueError: If no token is available
+        Current access token or None if not available
     """
-    token = auth_manager.get_access_token()
-    if not token:
-        token = auth_manager.authenticate(force_refresh=True)
-    
-    if not token:
-        raise ValueError("Could not obtain a valid access token. Please try again.")
-    
-    return token
+    return auth_manager.get_access_token()
 
 class GraphAPIError(Exception):
     """Exception raised for errors from the Graph API."""
@@ -328,6 +349,11 @@ class GraphAPIError(Exception):
         self.error_data = error_data
         self.message = error_data.get('message', 'Unknown Graph API error')
         super().__init__(self.message)
+        
+        # Check if this is an auth error
+        if "code" in error_data and error_data["code"] in [190, 102, 4]:
+            # Common auth error codes
+            auth_manager.invalidate_token()
 
 async def make_api_request(
     endpoint: str,
@@ -383,110 +409,113 @@ async def make_api_request(
                 error_info = {"status_code": e.response.status_code, "text": e.response.text}
             
             print(f"HTTP Error: {e.response.status_code} - {error_info}")
+            
+            # Check for authentication errors
+            if e.response.status_code == 401 or e.response.status_code == 403:
+                print("Detected authentication error")
+                auth_manager.invalidate_token()
+            elif "error" in error_info:
+                error_obj = error_info.get("error", {})
+                # Check for specific FB API errors related to auth
+                if isinstance(error_obj, dict) and error_obj.get("code") in [190, 102, 4, 200, 10]:
+                    print(f"Detected Facebook API auth error: {error_obj.get('code')}")
+                    auth_manager.invalidate_token()
+            
             return {"error": f"HTTP Error: {e.response.status_code}", "details": error_info}
         
         except Exception as e:
             print(f"Request Error: {str(e)}")
             return {"error": str(e)}
 
-async def download_image(url: str) -> Optional[bytes]:
+# Create login info resource
+@mcp_server.resource(uri="meta-ads://auth/login")
+async def get_login_info() -> Dict[str, Any]:
     """
-    Download an image from a URL.
+    Get login info when authentication is needed.
+    """
+    auth_url = auth_manager.get_auth_url()
     
-    Args:
-        url: Image URL
-        
-    Returns:
-        Image data as bytes if successful, None otherwise
+    login_instructions = """
+To authenticate with Meta Ads API:
+
+1. Run the login script with your Meta App ID:
+   - On macOS/Linux: ./login.sh YOUR_APP_ID
+   - On Windows: login.bat YOUR_APP_ID
+   
+2. Or run directly:
+   python meta_ads_generated.py --login --app-id YOUR_APP_ID
+   
+3. Or set the META_APP_ID environment variable and run:
+   python meta_ads_generated.py --login
+   
+This will open a browser window for authentication and cache the token.
     """
-    try:
-        print(f"Attempting to download image from URL: {url}")
+    
+    return {
+        "data": base64.b64encode(login_instructions.encode()).decode("utf-8"),
+        "mimeType": "text/plain",
+        "authUrl": auth_url,
+        "appId": auth_manager.app_id
+    }
+
+# Generic wrapper for all Meta API tools
+def meta_api_tool(func):
+    """Decorator to handle authentication for all Meta API tools"""
+    async def wrapper(*args, **kwargs):
+        # Check if access_token is provided in kwargs
+        access_token = kwargs.get('access_token')
         
-        # Use minimal headers like curl does
-        headers = {
-            "User-Agent": "curl/8.4.0",
-            "Accept": "*/*"
-        }
+        # If not, try to get it from the auth manager
+        if not access_token:
+            access_token = await get_current_access_token()
         
-        # Ensure the URL is properly escaped
-        # But don't modify the already encoded parameters
-        
-        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-            # Simple GET request just like curl
-            response = await client.get(url, headers=headers)
+        # If still no token, we need authentication
+        if not access_token:
+            global needs_authentication
+            needs_authentication = True
             
-            # Check response
-            if response.status_code == 200:
-                print(f"Successfully downloaded image: {len(response.content)} bytes")
-                return response.content
-            else:
-                print(f"Failed to download image: HTTP {response.status_code}")
-                return None
-                
-    except httpx.HTTPStatusError as e:
-        print(f"HTTP Error when downloading image: {e}")
-        return None
-    except httpx.RequestError as e:
-        print(f"Request Error when downloading image: {e}")
-        return None
-    except Exception as e:
-        print(f"Unexpected error downloading image: {e}")
-        return None
-
-# Add a new helper function to try different download methods
-async def try_multiple_download_methods(url: str) -> Optional[bytes]:
-    """
-    Try multiple methods to download an image, with different approaches for Meta CDN.
-    
-    Args:
-        url: Image URL
+            # Return a useful error message with instructions
+            auth_url = auth_manager.get_auth_url()
+            result = {
+                "error": "Authentication required",
+                "auth_url": auth_url,
+                "instructions": "Please authenticate with Meta Ads API. Run the login script or visit the auth URL."
+            }
+            return json.dumps(result, indent=2)
         
-    Returns:
-        Image data as bytes if successful, None otherwise
-    """
-    # Method 1: Direct download with custom headers
-    image_data = await download_image(url)
-    if image_data:
-        return image_data
-    
-    print("Direct download failed, trying alternative methods...")
-    
-    # Method 2: Try adding Facebook cookie simulation
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-            "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
-            "Cookie": "presence=EDvF3EtimeF1697900316EuserFA21B00112233445566AA0EstateFDutF0CEchF_7bCC"  # Fake cookie
-        }
+        # Update kwargs with the token
+        kwargs['access_token'] = access_token
         
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            response = await client.get(url, headers=headers, timeout=30.0)
-            response.raise_for_status()
-            print(f"Method 2 succeeded with cookie simulation: {len(response.content)} bytes")
-            return response.content
-    except Exception as e:
-        print(f"Method 2 failed: {str(e)}")
+        # Call the original function
+        try:
+            result = await func(*args, **kwargs)
+            
+            # If authentication is needed after the call (e.g., token was invalidated)
+            if needs_authentication:
+                auth_url = auth_manager.get_auth_url()
+                error_result = {
+                    "error": "Authentication required",
+                    "auth_url": auth_url,
+                    "instructions": "Session expired or token invalid. Please re-authenticate with Meta Ads API."
+                }
+                return json.dumps(error_result, indent=2)
+            
+            return result
+        except Exception as e:
+            # Handle any unexpected errors
+            error_result = {
+                "error": f"Error calling Meta API: {str(e)}"
+            }
+            return json.dumps(error_result, indent=2)
     
-    # Method 3: Try with session that keeps redirects and cookies
-    try:
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            # First visit Facebook to get cookies
-            await client.get("https://www.facebook.com/", timeout=30.0)
-            # Then try the image URL
-            response = await client.get(url, timeout=30.0)
-            response.raise_for_status()
-            print(f"Method 3 succeeded with Facebook session: {len(response.content)} bytes")
-            return response.content
-    except Exception as e:
-        print(f"Method 3 failed: {str(e)}")
-    
-    return None
+    # Return the wrapper function with the same name and docstring
+    wrapper.__name__ = func.__name__
+    wrapper.__doc__ = func.__doc__
+    return wrapper
 
-#
-# Ad Account Endpoints
-#
-
+# Apply the decorator to tool functions
 @mcp_server.tool()
+@meta_api_tool
 async def get_ad_accounts(access_token: str = None, user_id: str = "me", limit: int = 10) -> str:
     """
     Get ad accounts accessible by a user.
@@ -496,10 +525,6 @@ async def get_ad_accounts(access_token: str = None, user_id: str = "me", limit: 
         user_id: Meta user ID or "me" for the current user
         limit: Maximum number of accounts to return (default: 10)
     """
-    # Use provided token or get from auth manager
-    if not access_token:
-        access_token = await get_current_access_token()
-    
     endpoint = f"{user_id}/adaccounts"
     params = {
         "fields": "id,name,account_id,account_status,amount_spent,balance,currency,age,business_city,business_country_code",
@@ -511,6 +536,7 @@ async def get_ad_accounts(access_token: str = None, user_id: str = "me", limit: 
     return json.dumps(data, indent=2)
 
 @mcp_server.tool()
+@meta_api_tool
 async def get_account_info(access_token: str = None, account_id: str = None) -> str:
     """
     Get detailed information about a specific ad account.
@@ -519,10 +545,6 @@ async def get_account_info(access_token: str = None, account_id: str = None) -> 
         access_token: Meta API access token (optional - will use cached token if not provided)
         account_id: Meta Ads account ID (format: act_XXXXXXXXX)
     """
-    # Use provided token or get from auth manager
-    if not access_token:
-        access_token = await get_current_access_token()
-    
     # If no account ID is specified, try to get the first one for the user
     if not account_id:
         accounts_json = await get_ad_accounts(access_token, limit=1)
@@ -551,16 +573,27 @@ async def get_account_info(access_token: str = None, account_id: str = None) -> 
 #
 
 @mcp_server.tool()
-async def get_campaigns(access_token: str, account_id: str, limit: int = 10, status_filter: str = "") -> str:
+@meta_api_tool
+async def get_campaigns(access_token: str = None, account_id: str = None, limit: int = 10, status_filter: str = "") -> str:
     """
     Get campaigns for a Meta Ads account with optional filtering.
     
     Args:
-        access_token: Meta API access token
+        access_token: Meta API access token (optional - will use cached token if not provided)
         account_id: Meta Ads account ID (format: act_XXXXXXXXX)
         limit: Maximum number of campaigns to return (default: 10)
         status_filter: Filter by status (empty for all, or 'ACTIVE', 'PAUSED', etc.)
     """
+    # If no account ID is specified, try to get the first one for the user
+    if not account_id:
+        accounts_json = await get_ad_accounts(access_token, limit=1)
+        accounts_data = json.loads(accounts_json)
+        
+        if "data" in accounts_data and accounts_data["data"]:
+            account_id = accounts_data["data"][0]["id"]
+        else:
+            return json.dumps({"error": "No account ID specified and no accounts found for user"}, indent=2)
+    
     endpoint = f"{account_id}/campaigns"
     params = {
         "fields": "id,name,objective,status,daily_budget,lifetime_budget,buying_type,start_time,stop_time,created_time,updated_time,bid_strategy",
@@ -575,14 +608,18 @@ async def get_campaigns(access_token: str, account_id: str, limit: int = 10, sta
     return json.dumps(data, indent=2)
 
 @mcp_server.tool()
-async def get_campaign_details(access_token: str, campaign_id: str) -> str:
+@meta_api_tool
+async def get_campaign_details(access_token: str = None, campaign_id: str = None) -> str:
     """
     Get detailed information about a specific campaign.
     
     Args:
-        access_token: Meta API access token
+        access_token: Meta API access token (optional - will use cached token if not provided)
         campaign_id: Meta Ads campaign ID
     """
+    if not campaign_id:
+        return json.dumps({"error": "No campaign ID provided"}, indent=2)
+    
     endpoint = f"{campaign_id}"
     params = {
         "fields": "id,name,objective,status,daily_budget,lifetime_budget,buying_type,start_time,stop_time,created_time,updated_time,bid_strategy,special_ad_categories,special_ad_category_country,budget_remaining,configured_status"
@@ -593,11 +630,12 @@ async def get_campaign_details(access_token: str, campaign_id: str) -> str:
     return json.dumps(data, indent=2)
 
 @mcp_server.tool()
+@meta_api_tool
 async def create_campaign(
-    access_token: str,
-    account_id: str,
-    name: str,
-    objective: str,
+    access_token: str = None,
+    account_id: str = None,
+    name: str = None,
+    objective: str = None,
     status: str = "PAUSED",
     special_ad_categories: List[str] = None,
     daily_budget: Optional[int] = None,
@@ -607,7 +645,7 @@ async def create_campaign(
     Create a new campaign in a Meta Ads account.
     
     Args:
-        access_token: Meta API access token
+        access_token: Meta API access token (optional - will use cached token if not provided)
         account_id: Meta Ads account ID (format: act_XXXXXXXXX)
         name: Campaign name
         objective: Campaign objective (AWARENESS, TRAFFIC, ENGAGEMENT, etc.)
@@ -616,6 +654,16 @@ async def create_campaign(
         daily_budget: Daily budget in account currency (in cents)
         lifetime_budget: Lifetime budget in account currency (in cents)
     """
+    # Check required parameters
+    if not account_id:
+        return json.dumps({"error": "No account ID provided"}, indent=2)
+    
+    if not name:
+        return json.dumps({"error": "No campaign name provided"}, indent=2)
+        
+    if not objective:
+        return json.dumps({"error": "No campaign objective provided"}, indent=2)
+    
     endpoint = f"{account_id}/campaigns"
     
     params = {
@@ -642,16 +690,27 @@ async def create_campaign(
 #
 
 @mcp_server.tool()
-async def get_adsets(access_token: str, account_id: str, limit: int = 10, campaign_id: str = "") -> str:
+@meta_api_tool
+async def get_adsets(access_token: str = None, account_id: str = None, limit: int = 10, campaign_id: str = "") -> str:
     """
     Get ad sets for a Meta Ads account with optional filtering by campaign.
     
     Args:
-        access_token: Meta API access token
+        access_token: Meta API access token (optional - will use cached token if not provided)
         account_id: Meta Ads account ID (format: act_XXXXXXXXX)
         limit: Maximum number of ad sets to return (default: 10)
         campaign_id: Optional campaign ID to filter by
     """
+    # If no account ID is specified, try to get the first one for the user
+    if not account_id:
+        accounts_json = await get_ad_accounts(access_token, limit=1)
+        accounts_data = json.loads(accounts_json)
+        
+        if "data" in accounts_data and accounts_data["data"]:
+            account_id = accounts_data["data"][0]["id"]
+        else:
+            return json.dumps({"error": "No account ID specified and no accounts found for user"}, indent=2)
+    
     endpoint = f"{account_id}/adsets"
     params = {
         "fields": "id,name,campaign_id,status,daily_budget,lifetime_budget,targeting,bid_amount,bid_strategy,optimization_goal,billing_event,start_time,end_time,created_time,updated_time",
@@ -666,14 +725,18 @@ async def get_adsets(access_token: str, account_id: str, limit: int = 10, campai
     return json.dumps(data, indent=2)
 
 @mcp_server.tool()
-async def get_adset_details(access_token: str, adset_id: str) -> str:
+@meta_api_tool
+async def get_adset_details(access_token: str = None, adset_id: str = None) -> str:
     """
     Get detailed information about a specific ad set.
     
     Args:
-        access_token: Meta API access token
+        access_token: Meta API access token (optional - will use cached token if not provided)
         adset_id: Meta Ads ad set ID
     """
+    if not adset_id:
+        return json.dumps({"error": "No ad set ID provided"}, indent=2)
+    
     endpoint = f"{adset_id}"
     params = {
         "fields": "id,name,campaign_id,status,daily_budget,lifetime_budget,targeting,bid_amount,bid_strategy,optimization_goal,billing_event,start_time,end_time,created_time,updated_time,attribution_spec,destination_type,promoted_object,pacing_type,budget_remaining"
@@ -688,9 +751,10 @@ async def get_adset_details(access_token: str, adset_id: str) -> str:
 #
 
 @mcp_server.tool()
+@meta_api_tool
 async def get_ads(
-    access_token: str,
-    account_id: str,
+    access_token: str = None,
+    account_id: str = None,
     limit: int = 10,
     campaign_id: str = "",
     adset_id: str = ""
@@ -699,12 +763,22 @@ async def get_ads(
     Get ads for a Meta Ads account with optional filtering.
     
     Args:
-        access_token: Meta API access token
+        access_token: Meta API access token (optional - will use cached token if not provided)
         account_id: Meta Ads account ID (format: act_XXXXXXXXX)
         limit: Maximum number of ads to return (default: 10)
         campaign_id: Optional campaign ID to filter by
         adset_id: Optional ad set ID to filter by
     """
+    # If no account ID is specified, try to get the first one for the user
+    if not account_id:
+        accounts_json = await get_ad_accounts(access_token=access_token, limit=1)
+        accounts_data = json.loads(accounts_json)
+        
+        if "data" in accounts_data and accounts_data["data"]:
+            account_id = accounts_data["data"][0]["id"]
+        else:
+            return json.dumps({"error": "No account ID specified and no accounts found for user"}, indent=2)
+    
     endpoint = f"{account_id}/ads"
     params = {
         "fields": "id,name,adset_id,campaign_id,status,creative,created_time,updated_time,bid_amount,conversion_domain,tracking_specs",
@@ -722,14 +796,18 @@ async def get_ads(
     return json.dumps(data, indent=2)
 
 @mcp_server.tool()
-async def get_ad_details(access_token: str, ad_id: str) -> str:
+@meta_api_tool
+async def get_ad_details(access_token: str = None, ad_id: str = None) -> str:
     """
     Get detailed information about a specific ad.
     
     Args:
-        access_token: Meta API access token
+        access_token: Meta API access token (optional - will use cached token if not provided)
         ad_id: Meta Ads ad ID
     """
+    if not ad_id:
+        return json.dumps({"error": "No ad ID provided"}, indent=2)
+        
     endpoint = f"{ad_id}"
     params = {
         "fields": "id,name,adset_id,campaign_id,status,creative,created_time,updated_time,bid_amount,conversion_domain,tracking_specs,preview_shareable_link"
@@ -740,14 +818,18 @@ async def get_ad_details(access_token: str, ad_id: str) -> str:
     return json.dumps(data, indent=2)
 
 @mcp_server.tool()
-async def get_ad_creatives(access_token: str, ad_id: str) -> str:
+@meta_api_tool
+async def get_ad_creatives(access_token: str = None, ad_id: str = None) -> str:
     """
     Get creative details for a specific ad. Best if combined with get_ad_image to get the full image.
     
     Args:
-        access_token: Meta API access token
+        access_token: Meta API access token (optional - will use cached token if not provided)
         ad_id: Meta Ads ad ID
     """
+    if not ad_id:
+        return json.dumps({"error": "No ad ID provided"}, indent=2)
+        
     # First, get the creative ID from the ad
     endpoint = f"{ad_id}"
     params = {
@@ -889,17 +971,21 @@ async def get_ad_creatives(access_token: str, ad_id: str) -> str:
     return json.dumps(creative_data, indent=2)
 
 @mcp_server.tool()
-async def get_ad_image(access_token: str, ad_id: str) -> Image:
+@meta_api_tool
+async def get_ad_image(access_token: str = None, ad_id: str = None) -> Image:
     """
     Get, download, and visualize a Meta ad image in one step. Useful to see the image in the LLM.
     
     Args:
-        access_token: Meta API access token
+        access_token: Meta API access token (optional - will use cached token if not provided)
         ad_id: Meta Ads ad ID
     
     Returns:
         The ad image ready for direct visual analysis
     """
+    if not ad_id:
+        return "Error: No ad ID provided"
+        
     print(f"Attempting to get and analyze creative image for ad {ad_id}")
     
     # First, get creative and account IDs
@@ -1053,9 +1139,10 @@ async def get_resource(resource_id: str) -> Dict[str, Any]:
 #
 
 @mcp_server.tool()
+@meta_api_tool
 async def get_insights(
-    access_token: str,
-    object_id: str,
+    access_token: str = None,
+    object_id: str = None,
     time_range: str = "maximum",
     breakdown: str = "",
     level: str = "ad"
@@ -1064,12 +1151,15 @@ async def get_insights(
     Get performance insights for a campaign, ad set, ad or account.
     
     Args:
-        access_token: Meta API access token
+        access_token: Meta API access token (optional - will use cached token if not provided)
         object_id: ID of the campaign, ad set, ad or account
         time_range: Time range for insights (default: last_30_days, options: today, yesterday, this_month, last_month, this_quarter, maximum, data_maximum, last_3d, last_7d, last_14d, last_28d, last_30d, last_90d, last_week_mon_sun, last_week_sun_sat, last_quarter, last_year, this_week_mon_today, this_week_sun_today, this_year)
         breakdown: Optional breakdown dimension (e.g., age, gender, country)
         level: Level of aggregation (ad, adset, campaign, account)
     """
+    if not object_id:
+        return json.dumps({"error": "No object ID provided"}, indent=2)
+        
     endpoint = f"{object_id}/insights"
     params = {
         "date_preset": time_range,
@@ -1085,12 +1175,13 @@ async def get_insights(
     return json.dumps(data, indent=2)
 
 @mcp_server.tool()
-async def debug_image_download(access_token: str, url: str = "", ad_id: str = "") -> str:
+@meta_api_tool
+async def debug_image_download(access_token: str = None, url: str = "", ad_id: str = "") -> str:
     """
     Debug image download issues and report detailed diagnostics.
     
     Args:
-        access_token: Meta API access token
+        access_token: Meta API access token (optional - will use cached token if not provided)
         url: Direct image URL to test (optional)
         ad_id: Meta Ads ad ID (optional, used if url is not provided)
     """
@@ -1107,7 +1198,7 @@ async def debug_image_download(access_token: str, url: str = "", ad_id: str = ""
     if not url and ad_id:
         print(f"Getting image URL from ad creative for ad {ad_id}")
         # Get the creative details
-        creative_json = await get_ad_creatives(access_token, ad_id)
+        creative_json = await get_ad_creatives(access_token=access_token, ad_id=ad_id)
         creative_data = json.loads(creative_json)
         results["creative_data"] = creative_data
         
@@ -1268,15 +1359,19 @@ async def debug_image_download(access_token: str, url: str = "", ad_id: str = ""
     return json.dumps(results, indent=2)
 
 @mcp_server.tool()
-async def save_ad_image_via_api(access_token: str, ad_id: str) -> str:
+@meta_api_tool
+async def save_ad_image_via_api(access_token: str = None, ad_id: str = None) -> str:
     """
     Try to save an ad image by using the Marketing API's attachment endpoints.
     This is an alternative approach when direct image download fails.
     
     Args:
-        access_token: Meta API access token
+        access_token: Meta API access token (optional - will use cached token if not provided)
         ad_id: Meta Ads ad ID
     """
+    if not ad_id:
+        return json.dumps({"error": "No ad ID provided"}, indent=2)
+        
     # First get the ad's creative ID
     ad_endpoint = f"{ad_id}"
     ad_params = {
@@ -1462,13 +1557,105 @@ def login():
         print("Authentication successful!")
         # Verify token works by getting basic user info
         try:
-            import asyncio
             result = asyncio.run(make_api_request("me", token, {}))
             print(f"Authenticated as: {result.get('name', 'Unknown')} (ID: {result.get('id', 'Unknown')})")
         except Exception as e:
             print(f"Warning: Could not verify token: {e}")
     else:
         print("Authentication failed. Please try again.")
+
+async def download_image(url: str) -> Optional[bytes]:
+    """
+    Download an image from a URL.
+    
+    Args:
+        url: Image URL
+        
+    Returns:
+        Image data as bytes if successful, None otherwise
+    """
+    try:
+        print(f"Attempting to download image from URL: {url}")
+        
+        # Use minimal headers like curl does
+        headers = {
+            "User-Agent": "curl/8.4.0",
+            "Accept": "*/*"
+        }
+        
+        # Ensure the URL is properly escaped
+        # But don't modify the already encoded parameters
+        
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            # Simple GET request just like curl
+            response = await client.get(url, headers=headers)
+            
+            # Check response
+            if response.status_code == 200:
+                print(f"Successfully downloaded image: {len(response.content)} bytes")
+                return response.content
+            else:
+                print(f"Failed to download image: HTTP {response.status_code}")
+                return None
+                
+    except httpx.HTTPStatusError as e:
+        print(f"HTTP Error when downloading image: {e}")
+        return None
+    except httpx.RequestError as e:
+        print(f"Request Error when downloading image: {e}")
+        return None
+    except Exception as e:
+        print(f"Unexpected error downloading image: {e}")
+        return None
+
+# Add a new helper function to try different download methods
+async def try_multiple_download_methods(url: str) -> Optional[bytes]:
+    """
+    Try multiple methods to download an image, with different approaches for Meta CDN.
+    
+    Args:
+        url: Image URL
+        
+    Returns:
+        Image data as bytes if successful, None otherwise
+    """
+    # Method 1: Direct download with custom headers
+    image_data = await download_image(url)
+    if image_data:
+        return image_data
+    
+    print("Direct download failed, trying alternative methods...")
+    
+    # Method 2: Try adding Facebook cookie simulation
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+            "Cookie": "presence=EDvF3EtimeF1697900316EuserFA21B00112233445566AA0EstateFDutF0CEchF_7bCC"  # Fake cookie
+        }
+        
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            response = await client.get(url, headers=headers, timeout=30.0)
+            response.raise_for_status()
+            print(f"Method 2 succeeded with cookie simulation: {len(response.content)} bytes")
+            return response.content
+    except Exception as e:
+        print(f"Method 2 failed: {str(e)}")
+    
+    # Method 3: Try with session that keeps redirects and cookies
+    try:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            # First visit Facebook to get cookies
+            await client.get("https://www.facebook.com/", timeout=30.0)
+            # Then try the image URL
+            response = await client.get(url, timeout=30.0)
+            response.raise_for_status()
+            print(f"Method 3 succeeded with Facebook session: {len(response.content)} bytes")
+            return response.content
+    except Exception as e:
+        print(f"Method 3 failed: {str(e)}")
+    
+    return None
 
 if __name__ == "__main__":
     # Set up command line arguments
