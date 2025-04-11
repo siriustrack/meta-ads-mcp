@@ -5,9 +5,14 @@ import os
 import base64
 from mcp.server.fastmcp import FastMCP, Image
 import datetime
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 from PIL import Image as PILImage
 import io
+import webbrowser
+import time
+import platform
+import pathlib
+import argparse
 
 # Initialize FastMCP server
 mcp_server = FastMCP("meta-ads-generated")
@@ -17,8 +22,305 @@ META_GRAPH_API_VERSION = "v20.0"
 META_GRAPH_API_BASE = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}"
 USER_AGENT = "meta-ads-mcp/1.0"
 
+# Meta App configuration - Using a placeholder app ID. This will be overridden by:
+# 1. Command line arguments
+# 2. Environment variables 
+# 3. User input during runtime
+META_APP_ID = "YOUR_META_APP_ID"  # Will be replaced at runtime
+
+# Auth constants
+AUTH_SCOPE = "ads_management,ads_read,business_management"
+AUTH_REDIRECT_URI = "http://localhost:8888/callback"
+AUTH_RESPONSE_TYPE = "token"
+
 # Global store for ad creative images
 ad_creative_images = {}
+
+# Authentication related classes
+class TokenInfo:
+    """Stores token information including expiration"""
+    def __init__(self, access_token: str, expires_in: int = None, user_id: str = None):
+        self.access_token = access_token
+        self.expires_in = expires_in
+        self.user_id = user_id
+        self.created_at = int(time.time())
+    
+    def is_expired(self) -> bool:
+        """Check if the token is expired"""
+        if not self.expires_in:
+            return False  # If no expiration is set, assume it's not expired
+        
+        current_time = int(time.time())
+        return current_time > (self.created_at + self.expires_in)
+    
+    def serialize(self) -> Dict[str, Any]:
+        """Convert to a dictionary for storage"""
+        return {
+            "access_token": self.access_token,
+            "expires_in": self.expires_in,
+            "user_id": self.user_id,
+            "created_at": self.created_at
+        }
+    
+    @classmethod
+    def deserialize(cls, data: Dict[str, Any]) -> 'TokenInfo':
+        """Create from a stored dictionary"""
+        token = cls(
+            access_token=data.get("access_token", ""),
+            expires_in=data.get("expires_in"),
+            user_id=data.get("user_id")
+        )
+        token.created_at = data.get("created_at", int(time.time()))
+        return token
+
+
+class AuthManager:
+    """Manages authentication with Meta APIs"""
+    def __init__(self, app_id: str, redirect_uri: str = AUTH_REDIRECT_URI):
+        self.app_id = app_id
+        self.redirect_uri = redirect_uri
+        self.token_info = None
+        self._load_cached_token()
+    
+    def _get_token_cache_path(self) -> pathlib.Path:
+        """Get the platform-specific path for token cache file"""
+        if platform.system() == "Windows":
+            base_path = pathlib.Path(os.environ.get("APPDATA", ""))
+        elif platform.system() == "Darwin":  # macOS
+            base_path = pathlib.Path.home() / "Library" / "Application Support"
+        else:  # Assume Linux/Unix
+            base_path = pathlib.Path.home() / ".config"
+        
+        # Create directory if it doesn't exist
+        cache_dir = base_path / "meta-ads-mcp"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        
+        return cache_dir / "token_cache.json"
+    
+    def _load_cached_token(self) -> bool:
+        """Load token from cache if available"""
+        cache_path = self._get_token_cache_path()
+        
+        if not cache_path.exists():
+            return False
+        
+        try:
+            with open(cache_path, "r") as f:
+                data = json.load(f)
+                self.token_info = TokenInfo.deserialize(data)
+                
+                # Check if token is expired
+                if self.token_info.is_expired():
+                    print("Cached token is expired")
+                    self.token_info = None
+                    return False
+                
+                print(f"Loaded cached token (expires in {(self.token_info.created_at + self.token_info.expires_in) - int(time.time())} seconds)")
+                return True
+        except Exception as e:
+            print(f"Error loading cached token: {e}")
+            return False
+    
+    def _save_token_to_cache(self) -> None:
+        """Save token to cache file"""
+        if not self.token_info:
+            return
+        
+        cache_path = self._get_token_cache_path()
+        
+        try:
+            with open(cache_path, "w") as f:
+                json.dump(self.token_info.serialize(), f)
+            print(f"Token cached at: {cache_path}")
+        except Exception as e:
+            print(f"Error saving token to cache: {e}")
+    
+    def get_auth_url(self) -> str:
+        """Generate the Facebook OAuth URL for desktop app flow"""
+        return (
+            f"https://www.facebook.com/v18.0/dialog/oauth?"
+            f"client_id={self.app_id}&"
+            f"redirect_uri={self.redirect_uri}&"
+            f"scope={AUTH_SCOPE}&"
+            f"response_type={AUTH_RESPONSE_TYPE}"
+        )
+    
+    def start_local_server(self) -> str:
+        """
+        Start a local server to handle the OAuth callback.
+        Since we're using implicit flow with client-side token delivery,
+        we'll create a simple server that displays the token for the user to copy.
+        
+        Returns:
+            The access token from the callback
+        """
+        import socket
+        from http.server import HTTPServer, BaseHTTPRequestHandler
+        import threading
+        
+        token_container = {"token": None, "expires_in": None, "user_id": None}
+        
+        class CallbackHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path.startswith("/callback"):
+                    # Return a page that extracts token from URL hash fragment
+                    self.send_response(200)
+                    self.send_header("Content-type", "text/html")
+                    self.end_headers()
+                    
+                    html = """
+                    <html>
+                    <head><title>Authentication Successful</title></head>
+                    <body>
+                        <h1>Authentication Successful!</h1>
+                        <p>You can close this window and return to the application.</p>
+                        <script>
+                            // Extract token from URL hash
+                            const hash = window.location.hash.substring(1);
+                            const params = new URLSearchParams(hash);
+                            const token = params.get('access_token');
+                            const expires_in = params.get('expires_in');
+                            
+                            // Send token back to server using fetch
+                            fetch('/token?' + new URLSearchParams({
+                                token: token,
+                                expires_in: expires_in
+                            }))
+                            .then(response => console.log('Token sent to app'));
+                        </script>
+                    </body>
+                    </html>
+                    """
+                    self.wfile.write(html.encode())
+                    return
+                
+                if self.path.startswith("/token"):
+                    # Extract token from query params
+                    query = parse_qs(urlparse(self.path).query)
+                    token_container["token"] = query.get("token", [""])[0]
+                    
+                    if "expires_in" in query:
+                        try:
+                            token_container["expires_in"] = int(query.get("expires_in", ["0"])[0])
+                        except ValueError:
+                            token_container["expires_in"] = None
+                    
+                    # Send success response
+                    self.send_response(200)
+                    self.send_header("Content-type", "text/plain")
+                    self.end_headers()
+                    self.wfile.write(b"Token received")
+                    
+                    # Signal the server to shut down
+                    threading.Thread(target=server.shutdown).start()
+                    return
+            
+            # Silence server logs
+            def log_message(self, format, *args):
+                return
+        
+        # Find an available port starting with 8888
+        port = 8888
+        max_attempts = 10
+        for attempt in range(max_attempts):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(('localhost', port))
+                    break
+            except OSError:
+                port += 1
+                if attempt == max_attempts - 1:
+                    raise Exception(f"Could not find an available port after {max_attempts} attempts")
+        
+        # Update redirect URI with actual port
+        self.redirect_uri = f"http://localhost:{port}/callback"
+        
+        # Start HTTP server
+        server = HTTPServer(('localhost', port), CallbackHandler)
+        print(f"Callback server started on port {port}")
+        
+        # Open browser with auth URL
+        auth_url = self.get_auth_url()
+        print(f"Opening browser with URL: {auth_url}")
+        webbrowser.open(auth_url)
+        
+        # Run server until we get the token
+        server.serve_forever()
+        
+        # Return the token
+        return token_container.get("token"), token_container.get("expires_in")
+    
+    def authenticate(self, force_refresh: bool = False) -> Optional[str]:
+        """
+        Authenticate with Meta APIs
+        
+        Args:
+            force_refresh: Force token refresh even if cached token exists
+            
+        Returns:
+            Access token if successful, None otherwise
+        """
+        # Check if we already have a valid token
+        if not force_refresh and self.token_info and not self.token_info.is_expired():
+            return self.token_info.access_token
+        
+        # Start the OAuth flow
+        try:
+            token, expires_in = self.start_local_server()
+            
+            if not token:
+                print("Authentication failed: No token received")
+                return None
+            
+            self.token_info = TokenInfo(
+                access_token=token,
+                expires_in=expires_in
+            )
+            
+            # Save token to cache
+            self._save_token_to_cache()
+            
+            return self.token_info.access_token
+        
+        except Exception as e:
+            print(f"Authentication error: {e}")
+            return None
+    
+    def get_access_token(self) -> Optional[str]:
+        """
+        Get the current access token, refreshing if necessary
+        
+        Returns:
+            Access token if available, None otherwise
+        """
+        if not self.token_info or self.token_info.is_expired():
+            return self.authenticate()
+        
+        return self.token_info.access_token
+
+
+# Initialize auth manager
+auth_manager = AuthManager(META_APP_ID)
+
+# Function to get token without requiring it as a parameter
+async def get_current_access_token() -> str:
+    """
+    Get the current access token, triggering authentication if needed
+    
+    Returns:
+        Current access token
+    
+    Raises:
+        ValueError: If no token is available
+    """
+    token = auth_manager.get_access_token()
+    if not token:
+        token = auth_manager.authenticate(force_refresh=True)
+    
+    if not token:
+        raise ValueError("Could not obtain a valid access token. Please try again.")
+    
+    return token
 
 class GraphAPIError(Exception):
     """Exception raised for errors from the Graph API."""
@@ -185,15 +487,19 @@ async def try_multiple_download_methods(url: str) -> Optional[bytes]:
 #
 
 @mcp_server.tool()
-async def get_ad_accounts(access_token: str, user_id: str = "me", limit: int = 10) -> str:
+async def get_ad_accounts(access_token: str = None, user_id: str = "me", limit: int = 10) -> str:
     """
     Get ad accounts accessible by a user.
     
     Args:
-        access_token: Meta API access token
+        access_token: Meta API access token (optional - will use cached token if not provided)
         user_id: Meta user ID or "me" for the current user
         limit: Maximum number of accounts to return (default: 10)
     """
+    # Use provided token or get from auth manager
+    if not access_token:
+        access_token = await get_current_access_token()
+    
     endpoint = f"{user_id}/adaccounts"
     params = {
         "fields": "id,name,account_id,account_status,amount_spent,balance,currency,age,business_city,business_country_code",
@@ -205,14 +511,28 @@ async def get_ad_accounts(access_token: str, user_id: str = "me", limit: int = 1
     return json.dumps(data, indent=2)
 
 @mcp_server.tool()
-async def get_account_info(access_token: str, account_id: str) -> str:
+async def get_account_info(access_token: str = None, account_id: str = None) -> str:
     """
     Get detailed information about a specific ad account.
     
     Args:
-        access_token: Meta API access token
+        access_token: Meta API access token (optional - will use cached token if not provided)
         account_id: Meta Ads account ID (format: act_XXXXXXXXX)
     """
+    # Use provided token or get from auth manager
+    if not access_token:
+        access_token = await get_current_access_token()
+    
+    # If no account ID is specified, try to get the first one for the user
+    if not account_id:
+        accounts_json = await get_ad_accounts(access_token, limit=1)
+        accounts_data = json.loads(accounts_json)
+        
+        if "data" in accounts_data and accounts_data["data"]:
+            account_id = accounts_data["data"][0]["id"]
+        else:
+            return json.dumps({"error": "No account ID specified and no accounts found for user"}, indent=2)
+    
     # Ensure account_id has the 'act_' prefix for API compatibility
     if not account_id.startswith("act_"):
         account_id = f"act_{account_id}"
@@ -1130,6 +1450,41 @@ async def save_ad_image_via_api(access_token: str, ad_id: str) -> str:
         
     return json.dumps(result, indent=2)
 
+# Helper function to start the login flow
+def login():
+    """
+    Start the login flow to authenticate with Meta
+    """
+    print("Starting Meta Ads authentication flow...")
+    token = auth_manager.authenticate(force_refresh=True)
+    
+    if token:
+        print("Authentication successful!")
+        # Verify token works by getting basic user info
+        try:
+            import asyncio
+            result = asyncio.run(make_api_request("me", token, {}))
+            print(f"Authenticated as: {result.get('name', 'Unknown')} (ID: {result.get('id', 'Unknown')})")
+        except Exception as e:
+            print(f"Warning: Could not verify token: {e}")
+    else:
+        print("Authentication failed. Please try again.")
+
 if __name__ == "__main__":
-    # Initialize and run the server
-    mcp_server.run(transport='stdio') 
+    # Set up command line arguments
+    parser = argparse.ArgumentParser(description="Meta Ads MCP Server")
+    parser.add_argument("--login", action="store_true", help="Authenticate with Meta and store the token")
+    parser.add_argument("--app-id", type=str, help="Meta App ID (Client ID) for authentication")
+    
+    args = parser.parse_args()
+    
+    # Update app ID if provided
+    if args.app_id:
+        auth_manager.app_id = args.app_id
+    
+    # Handle login command
+    if args.login:
+        login()
+    else:
+        # Initialize and run the server
+        mcp_server.run(transport='stdio') 

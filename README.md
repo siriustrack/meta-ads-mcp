@@ -1,150 +1,156 @@
-# Meta Ads MCP Server
+# Meta Ads MCP
 
-A Model Context Protocol (MCP) server that provides tools for querying the Meta Ads API.
+A [Model Calling Protocol (MCP)](https://github.com/anthropics/anthropic-tools) plugin for interacting with Meta Ads API.
+
+## Features
+
+- Seamless authentication with Meta's Graph API for desktop applications
+- Automatic token caching across sessions
+- Cross-platform support (Windows, macOS, Linux)
+- Access to ad accounts, campaigns, ad sets, and ads
+- Image download and analysis capabilities
+- Performance insights
 
 ## Setup
 
-1. Install dependencies:
+### 1. Create a Meta Developer App
+
+1. Go to [Meta for Developers](https://developers.facebook.com/) and create a new app
+2. Choose the "Consumer" app type
+3. In your app settings, add the "Marketing API" product
+4. Configure your app's OAuth redirect URI to include `http://localhost:8888/callback`
+5. Note your App ID (Client ID) for use with the MCP
+
+### 2. Install Dependencies
+
 ```bash
-# Using pip
-pip install mcp>=1.2.0 httpx>=0.26.0
-
-# Or using Poetry
-poetry add mcp httpx
-
-# Or using uv (recommended)
-uv pip install mcp>=1.2.0 httpx>=0.26.0
+pip install -r requirements.txt
 ```
 
-2. Run the server:
+## Authentication
+
+The Meta Ads MCP uses the OAuth 2.0 flow designed for desktop apps. The first time you use it, it will:
+
+1. Open a browser window to authenticate with Meta
+2. Ask you to authorize the app
+3. Redirect back to a local server running on your machine
+4. Extract and store the token securely
+
+### Initial Authentication
+
+You can trigger the authentication process in two ways:
+
+1. Using the dedicated login command:
+
 ```bash
-# Direct execution (for development only)
-python meta_ads.py
-
-# Using uv (recommended)
-uv run python meta_ads.py
+python meta_ads_generated.py --login --app-id YOUR_APP_ID
 ```
 
-Note: The server uses stdio transport, so it won't output anything when run directly. It's meant to be used with an MCP client like Claude for Desktop or Cursor.
+2. Or by running any command which will automatically prompt for authentication if needed:
 
-## Tools
-
-This MCP server provides the following tools:
-
-1. `get_ads` - Retrieves ads from a Meta Ads account
-2. `get_campaigns` - Retrieves campaigns from a Meta Ads account
-3. `get_adsets` - Retrieves ad sets from a Meta Ads account
-
-## Configuration with Claude for Desktop
-
-To use this MCP server with Claude for Desktop, add the following to your Claude configuration file:
-
-1. Open your Claude for Desktop configuration:
-   - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - Windows: `%AppData%\Claude\claude_desktop_config.json`
-
-2. Add the server configuration:
-```json
-{
-    "mcpServers": {
-        "meta-ads": {
-            "command": "uv",
-            "args": [
-                "--directory",
-                "/ABSOLUTE/PATH/TO/PARENT/FOLDER",
-                "run",
-                "python",
-                "meta_ads.py"
-            ]
-        }
-    }
-}
-```
-
-3. Replace `/ABSOLUTE/PATH/TO/PARENT/FOLDER` with the absolute path to the directory containing your `meta_ads.py` file. For example: `/Users/username/projects/meta-ads-mcp`
-
-4. Restart Claude for Desktop.
-
-## Configuration with Cursor
-
-To use this MCP server with Cursor:
-
-1. Edit the Cursor MCP configuration file:
-   - macOS: `~/.cursor/mcp.json`
-   - Windows: `%AppData%\Cursor\User\mcp.json` 
-
-2. Add the server configuration:
-```json
-{
-  "mcpServers": {
-    "meta-ads": {
-      "command": "uv",
-      "args": [
-        "--directory",
-        "/ABSOLUTE/PATH/TO/PARENT/FOLDER",
-        "run",
-        "python",
-        "meta_ads.py"
-      ],
-      "description": "Meta Ads API MCP server",
-      "autoconnect": true
-    }
-  }
-}
-```
-
-3. Replace `/ABSOLUTE/PATH/TO/PARENT/FOLDER` with the absolute path to the directory containing your `meta_ads.py` file.
-
-4. Restart Cursor or reconnect to the MCP server.
-
-## Usage with Claude or Cursor
-
-You can now ask about your Meta Ads account. Example prompts:
-- "Show me the ads in my Meta Ads account with ID act_123456789"
-- "What campaigns do I have running in my Meta Ads account?"
-- "List the ad sets for my Meta account"
-
-The assistant will use the provided access token and account ID to fetch the requested information.
-
-## Important Notes
-
-- You need a valid Meta Ads API access token to use these tools
-- Your account ID should be in the format `act_XXXXXXXXX`
-- The server will fetch a maximum of 10 items by default (configurable with the `limit` parameter)
-- Using UV is recommended for better dependency management 
-
-## Generated Meta Ads API Implementation
-
-This project now includes an alternative implementation (`meta_ads_generated.py`) that provides a more complete interface to the Meta Ads API using Facebook's Graph API. This implementation:
-
-1. Offers more detailed parameters and fields for each endpoint
-2. Provides additional functionality like filtering campaigns by status
-3. Adds support for creating new campaigns
-4. Includes enhanced error handling and debugging
-
-### Additional Tools in Generated Implementation
-
-The generated implementation includes all the tools from the original implementation, plus:
-
-1. `get_ad_accounts` - Get ad accounts accessible by a user
-2. `get_account_info` - Get detailed information about a specific ad account
-3. `get_campaign_details` - Get detailed information about a specific campaign
-4. `get_adset_details` - Get detailed information about a specific ad set
-5. `get_ad_details` - Get detailed information about a specific ad
-6. `create_campaign` - Create a new campaign in a Meta Ads account
-7. `get_insights` - Get performance insights with optional breakdowns
-
-### Using the Generated Implementation
-
-To use the generated implementation with Cursor:
-
-1. The configuration is already included in your Cursor MCP configuration
-2. Run the server using the provided script:
 ```bash
-./run_mcp_generated.sh
+python test_meta_ads_auth.py --app-id YOUR_APP_ID
 ```
 
-3. When talking to Claude in Cursor, you can access the new tools with queries like:
-   - "Show me detailed performance insights for my campaign"
-   - "Get all my ad accounts"
-   - "Create a new campaign for my Meta Ads account" 
+### Token Caching
+
+Tokens are cached in a platform-specific secure location:
+- Windows: `%APPDATA%\meta-ads-mcp\token_cache.json`
+- macOS: `~/Library/Application Support/meta-ads-mcp/token_cache.json`
+- Linux: `~/.config/meta-ads-mcp/token_cache.json`
+
+You do not need to provide your access token for each command; it will be automatically retrieved from the cache.
+
+## Usage Examples
+
+### Test Authentication
+
+```bash
+python test_meta_ads_auth.py --app-id YOUR_APP_ID
+```
+
+### Get Ad Accounts
+
+```python
+import asyncio
+from meta_ads_generated import get_ad_accounts
+
+async def main():
+    # Token will be automatically retrieved from cache
+    accounts_json = await get_ad_accounts()
+    print(accounts_json)
+
+asyncio.run(main())
+```
+
+### Get Campaign Details
+
+```python
+import asyncio
+from meta_ads_generated import get_campaign_details
+
+async def main():
+    # Provide a campaign ID
+    campaign_details = await get_campaign_details(campaign_id="123456789")
+    print(campaign_details)
+
+asyncio.run(main())
+```
+
+### Create a Campaign
+
+```python
+import asyncio
+from meta_ads_generated import create_campaign
+
+async def main():
+    result = await create_campaign(
+        account_id="act_123456789",
+        name="Test Campaign via MCP",
+        objective="AWARENESS",
+        status="PAUSED",
+        daily_budget=1000  # $10.00
+    )
+    print(result)
+
+asyncio.run(main())
+```
+
+## Environment Variables
+
+You can set the following environment variables instead of passing them as arguments:
+
+- `META_APP_ID`: Your Meta App ID (Client ID)
+
+## Testing
+
+Run the test script to verify authentication and basic functionality:
+
+```bash
+python test_meta_ads_auth.py --app-id YOUR_APP_ID
+```
+
+Use the `--force-login` flag to force a new authentication even if a cached token exists:
+
+```bash
+python test_meta_ads_auth.py --app-id YOUR_APP_ID --force-login
+```
+
+## Troubleshooting
+
+### Authentication Issues
+
+If you encounter authentication issues:
+
+1. Run with `--force-login` to get a fresh token
+2. Check that your app is properly configured in the Meta Developers portal
+3. Ensure your app has the necessary permissions (ads_management, ads_read)
+4. Check the app's redirect URI includes http://localhost:8888/callback
+
+### API Errors
+
+If you receive errors from the Meta API:
+
+1. Verify your app has the Marketing API product added
+2. Ensure the user has appropriate permissions on the ad accounts
+3. Check if there are rate limits or other restrictions on your app 
