@@ -3,7 +3,7 @@
 __version__ = "0.1.0"
 
 # Import key functions to make them available at package level
-from .meta_ads_generated import (
+from .api import (
     get_ad_accounts,
     get_account_info,
     get_campaigns,
@@ -18,4 +18,10 @@ from .meta_ads_generated import (
     get_insights,
     get_login_link,
     login_cli,
-) 
+    main,  # Import main function for entry point
+)
+
+# Define a main function to be used as a package entry point
+def entrypoint():
+    """Main entry point for the package when invoked with uvx."""
+    return main() 

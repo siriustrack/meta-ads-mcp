@@ -32,7 +32,8 @@ dependencies = [
 "Bug Tracker" = "https://github.com/nictuku/meta-ads-mcp/issues"
 
 [project.scripts]
-meta-ads-login = "meta_ads_mcp.meta_ads_generated:login_cli"
+meta-ads-mcp = "meta_ads_mcp:entrypoint"
+meta-ads-login = "meta_ads_mcp.api:login_cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["meta_ads_mcp"]

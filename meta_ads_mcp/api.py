@@ -298,6 +298,9 @@ class AuthManager:
             except Exception as e:
                 print(f"Error removing cached token: {e}")
 
+    def clear_token(self) -> None:
+        """Clear the current token and remove from cache"""
+        self.invalidate_token()
 
 # Initialize auth manager
 auth_manager = AuthManager(META_APP_ID)
@@ -1820,7 +1823,35 @@ def start_callback_server():
                 return start_callback_server()  # Recursive call with a new port
             raise e
 
-if __name__ == "__main__":
+def login_cli():
+    """
+    Command line entry point for just the login function.
+    """
+    # Set up command line arguments
+    parser = argparse.ArgumentParser(description="Meta Ads Login Utility")
+    parser.add_argument("--app-id", type=str, help="Meta App ID (Client ID) for authentication")
+    parser.add_argument("--force-login", action="store_true", help="Force a new login even if a token exists")
+    
+    args = parser.parse_args()
+    
+    # Update app ID if provided
+    if args.app_id:
+        auth_manager.app_id = args.app_id
+    
+    if args.force_login:
+        # Clear existing token
+        auth_manager.clear_token()
+    
+    # Perform login
+    login()
+    
+    return 0
+
+def main():
+    """
+    Main entry point for the Meta Ads MCP server.
+    This function handles command line arguments and runs the server.
+    """
     # Set up command line arguments
     parser = argparse.ArgumentParser(description="Meta Ads MCP Server")
     parser.add_argument("--login", action="store_true", help="Authenticate with Meta and store the token")
@@ -1837,4 +1868,10 @@ if __name__ == "__main__":
         login()
     else:
         # Initialize and run the server
-        mcp_server.run(transport='stdio') 
+        mcp_server.run(transport='stdio')
+    
+    return 0
+
+# Modify the if __name__ block to use the main function
+if __name__ == "__main__":
+    main() 
