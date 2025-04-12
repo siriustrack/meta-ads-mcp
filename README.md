@@ -174,14 +174,7 @@ Add this to your `claude_desktop_config.json` to integrate with Claude in Cursor
       - `ad_id`: Meta Ads ad ID (optional, used if url is not provided)
     - Returns: Diagnostic information about image download attempts
 
-14. `mcp_meta_ads_save_ad_image_via_api`
-    - Try to save an ad image by using the Marketing API's attachment endpoints
-    - Inputs:
-      - `access_token` (optional): Meta API access token (will use cached token if not provided)
-      - `ad_id`: Meta Ads ad ID
-    - Returns: Results of attempts to save the ad image
-
-15. `mcp_meta_ads_get_login_link`
+14. `mcp_meta_ads_get_login_link`
     - Get a clickable login link for Meta Ads authentication
     - Inputs:
       - `access_token` (optional): Meta API access token (will use cached token if not provided)
