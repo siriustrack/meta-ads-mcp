@@ -20,7 +20,7 @@ A [Model Calling Protocol (MCP)](https://github.com/anthropics/anthropic-tools) 
 When using uv no specific installation is needed. We can use uvx to directly run meta-ads-mcp:
 
 ```bash
-uvx meta-ads-mcp
+uvx meta-ads-mcp --app-id YOUR_META_ADS_APP_ID
 ```
 
 If you want to install the package:
@@ -60,7 +60,7 @@ Add this to your `claude_desktop_config.json` to integrate with Claude in Cursor
 "mcpServers": {
   "meta-ads": {
     "command": "uvx",
-    "args": ["meta-ads-mcp"]
+    "args": ["meta-ads-mcp", "--app-id", "YOUR_META_ADS_APP_ID"]
   }
 }
 ```
