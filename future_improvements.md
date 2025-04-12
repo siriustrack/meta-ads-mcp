@@ -11,7 +11,7 @@ Don't share it ever with the LLM, only update the auth cache.
 ## Planned Improvement: Ad Set Update Confirmation Flow
 
 ### Overview
-Currently, the `update_adset` function directly applies changes to Meta Ad Sets without user confirmation. This is potentially risky as users may not fully understand the impact of their changes before they're applied. We plan to implement a confirmation flow similar to the authentication flow that already exists for the `get_login_link` function.
+Currently, the `update_adset` function directly applies changes to Meta Ad Sets without user confirmation. This is potentially risky as users may not fully understand the impact of their changes before they're applied. We plan to implement a confirmation flow similar to the authentication flow that already exists for the `authenticate` function.
 
 ### Requirements
 

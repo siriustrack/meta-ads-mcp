@@ -9,7 +9,7 @@ from .server import mcp_server
 
 @mcp_server.tool()
 @meta_api_tool
-async def get_login_link(access_token: str = None) -> str:
+async def authenticate(access_token: str = None) -> str:
     """
     Get a clickable login link for Meta Ads authentication.
     
