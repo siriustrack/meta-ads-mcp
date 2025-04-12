@@ -8,12 +8,16 @@ A [Model Calling Protocol (MCP)](https://github.com/anthropics/anthropic-tools) 
 
 ## Features
 
-- Seamless authentication with Meta's Graph API for desktop applications
-- Automatic token caching across sessions
-- Cross-platform support (Windows, macOS, Linux)
-- Access to ad accounts, campaigns, ad sets, and ads
-- Image download and analysis capabilities
-- Performance insights
+- **AI-Powered Campaign Analysis**: Let your favorite LLM analyze your campaigns and provide actionable insights on performance
+- **Strategic Recommendations**: Receive data-backed suggestions for optimizing ad spend, targeting, and creative content
+- **Automated Monitoring**: Ask any MCP-compatible LLM to track performance metrics and alert you about significant changes
+- **Budget Optimization**: Get recommendations for reallocating budget to better-performing ad sets
+- **Creative Improvement**: Receive feedback on ad copy, imagery, and calls-to-action
+- **Campaign Management**: Request changes to campaigns, ad sets, and ads (all changes require explicit confirmation)
+- **Cross-Platform Integration**: Works with Facebook, Instagram, and all Meta ad platforms
+- **Universal LLM Support**: Compatible with any MCP client including Claude Desktop, Cursor, Cherry Studio, and more
+- **Simple Authentication**: Easy setup with secure OAuth authentication
+- **Cross-Platform Support**: Works on Windows, macOS, and Linux
 
 ## Installation
 
