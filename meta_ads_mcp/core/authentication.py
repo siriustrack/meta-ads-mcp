@@ -5,6 +5,7 @@ import asyncio
 from .api import meta_api_tool
 from .auth import start_callback_server, auth_manager, get_current_access_token
 from .server import mcp_server
+from .utils import logger
 
 
 @mcp_server.tool()
@@ -24,6 +25,7 @@ async def get_login_link(access_token: str = None) -> str:
     
     # If we already have a valid token and none was provided, just return success
     if cached_token and not access_token:
+        logger.info("get_login_link called with existing valid token")
         return json.dumps({
             "message": "Already authenticated",
             "token_status": token_status,
@@ -34,11 +36,15 @@ async def get_login_link(access_token: str = None) -> str:
     
     # IMPORTANT: Start the callback server first by calling our helper function
     # This ensures the server is ready before we provide the URL to the user
+    logger.info("Starting callback server for authentication")
     port = start_callback_server()
+    logger.info(f"Callback server started on port {port}")
     
     # Generate direct login URL
     auth_manager.redirect_uri = f"http://localhost:{port}/callback"  # Ensure port is set correctly
+    logger.info(f"Setting redirect URI to {auth_manager.redirect_uri}")
     login_url = auth_manager.get_auth_url()
+    logger.info(f"Generated login URL: {login_url}")
     
     # Return a special format that helps the LLM format the response properly
     response = {

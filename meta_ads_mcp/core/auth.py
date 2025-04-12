@@ -12,11 +12,17 @@ import asyncio
 from urllib.parse import urlparse, parse_qs
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
+from .utils import logger
 
 # Auth constants
 AUTH_SCOPE = "ads_management,ads_read,business_management"
 AUTH_REDIRECT_URI = "http://localhost:8888/callback"
 AUTH_RESPONSE_TYPE = "token"
+
+# Log important configuration information
+logger.info("Authentication module initialized")
+logger.info(f"Auth scope: {AUTH_SCOPE}")
+logger.info(f"Default redirect URI: {AUTH_REDIRECT_URI}")
 
 # Global token container for communication between threads
 token_container = {"token": None, "expires_in": None, "user_id": None}
@@ -33,6 +39,54 @@ callback_server_lock = threading.Lock()
 callback_server_running = False
 callback_server_port = None
 
+# Meta configuration singleton
+class MetaConfig:
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            logger.debug("Creating new MetaConfig instance")
+            cls._instance = super(MetaConfig, cls).__new__(cls)
+            cls._instance.app_id = os.environ.get("META_APP_ID", "")
+            logger.info(f"MetaConfig initialized with app_id from env: {cls._instance.app_id}")
+        return cls._instance
+    
+    def set_app_id(self, app_id):
+        """Set the Meta App ID for API calls"""
+        logger.info(f"Setting Meta App ID: {app_id}")
+        self.app_id = app_id
+        # Also update environment variable for modules that might read directly from it
+        os.environ["META_APP_ID"] = app_id
+        logger.debug(f"Updated META_APP_ID environment variable: {os.environ.get('META_APP_ID')}")
+    
+    def get_app_id(self):
+        """Get the current Meta App ID"""
+        # Check if we have one set
+        if hasattr(self, 'app_id') and self.app_id:
+            logger.debug(f"Using app_id from instance: {self.app_id}")
+            return self.app_id
+        
+        # If not, try environment variable
+        env_app_id = os.environ.get("META_APP_ID", "")
+        if env_app_id:
+            logger.debug(f"Using app_id from environment: {env_app_id}")
+            # Update our instance for future use
+            self.app_id = env_app_id
+            return env_app_id
+        
+        logger.warning("No app_id found in instance or environment variables")
+        return ""
+    
+    def is_configured(self):
+        """Check if the Meta configuration is complete"""
+        app_id = self.get_app_id()
+        configured = bool(app_id)
+        logger.debug(f"MetaConfig.is_configured() = {configured} (app_id: {app_id})")
+        return configured
+
+# Create singleton instance
+meta_config = MetaConfig()
+
 class TokenInfo:
     """Stores token information including expiration"""
     def __init__(self, access_token: str, expires_in: int = None, user_id: str = None):
@@ -40,6 +94,7 @@ class TokenInfo:
         self.expires_in = expires_in
         self.user_id = user_id
         self.created_at = int(time.time())
+        logger.debug(f"TokenInfo created. Expires in: {expires_in if expires_in else 'Not specified'}")
     
     def is_expired(self) -> bool:
         """Check if the token is expired"""
@@ -590,22 +645,30 @@ class CallbackHandler(BaseHTTPRequestHandler):
             # Process the token (save it) immediately
             if token_container["token"]:
                 # Create token info and save to cache
+                logger.info("Token received in callback handler, attempting to save to cache")
                 token_info = TokenInfo(
                     access_token=token_container["token"],
                     expires_in=token_container["expires_in"]
                 )
                 
                 try:
+                    # Set the token info in the auth_manager first
+                    global auth_manager
+                    auth_manager.token_info = token_info
+                    logger.info(f"Token info set in auth_manager, expires in {token_info.expires_in} seconds")
+                    
                     # Save to cache
-                    self._save_token_to_cache()
+                    auth_manager._save_token_to_cache()
+                    logger.info(f"Token successfully saved to cache at {auth_manager._get_token_cache_path()}")
                 except Exception as e:
-                    pass
+                    logger.error(f"Error saving token to cache: {e}")
                 
                 # Reset auth needed flag
                 needs_authentication = False
                 
                 return token_container["token"]
             else:
+                logger.warning("Received empty token in callback")
                 needs_authentication = True
                 return None
     
@@ -701,44 +764,57 @@ def process_token_response(token_container):
     global needs_authentication
     
     if token_container and token_container.get('token'):
+        logger.info("Processing token response from Facebook OAuth")
         token_info = TokenInfo(
             access_token=token_container['token'],
             expires_in=token_container.get('expires_in', 0)
         )
         
         try:
+            global auth_manager
             auth_manager.token_info = token_info
+            logger.info(f"Token info set in auth_manager, expires in {token_info.expires_in} seconds")
         except NameError:
-            pass
+            logger.error("auth_manager not defined when trying to process token")
             
         try:
+            logger.info("Attempting to save token to cache")
             auth_manager._save_token_to_cache()
+            logger.info(f"Token successfully saved to cache at {auth_manager._get_token_cache_path()}")
         except Exception as e:
-            pass
+            logger.error(f"Error saving token to cache: {e}")
             
         needs_authentication = False
         return True
     else:
+        logger.warning("Received empty token in process_token_response")
         needs_authentication = True
         return False
 
 
-async def get_current_access_token():
-    """Get the current access token, either from auth_manager or token_container."""
+async def get_current_access_token() -> Optional[str]:
+    """Get the current access token from auth manager"""
+    # Use the singleton auth manager
+    global auth_manager
+    
+    # Log the function call and current app ID
+    logger.debug("get_current_access_token() called")
+    app_id = meta_config.get_app_id()
+    logger.debug(f"Current app_id: {app_id}")
+    
+    # Attempt to get access token
     try:
         token = auth_manager.get_access_token()
+        
         if token:
+            logger.debug("Access token found in auth_manager")
             return token
-    except Exception:
-        if token_container.get('token'):
-            auth_manager.token_info = TokenInfo(
-                access_token=token_container['token'],
-                expires_in=token_container.get('expires_in', 0)
-            )
-            return token_container['token']
-        pass
-    
-    return None
+        else:
+            logger.warning("No valid access token available in auth_manager")
+            return None
+    except Exception as e:
+        logger.error(f"Error getting access token: {str(e)}")
+        return None
 
 
 def login():

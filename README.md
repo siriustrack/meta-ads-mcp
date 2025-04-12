@@ -199,42 +199,73 @@ The Meta Ads MCP uses the OAuth 2.0 flow designed for desktop apps. When authent
 3. Ask you to authorize the app
 4. Redirect back to the local server to extract and store the token securely
 
-### Authentication Methods
+## Troubleshooting and Logging
 
-There are two ways to authenticate with the Meta Ads API:
+The Meta Ads MCP includes a comprehensive logging system to help troubleshoot issues:
 
-1. **LLM/MCP Interface Authentication** (Recommended)
-   
-   When using the Meta Ads MCP through an LLM interface (like Claude), simply use any Meta Ads function. If you're not authenticated, the system will automatically provide a clickable Markdown link to complete the authentication flow.
+### Log Location
 
-   ```
-   [Click here to authenticate with Meta Ads API](https://www.facebook.com/dialog/oauth?...)
-   ```
+Log files are stored in a platform-specific location:
 
-   Just click the link, complete the authorization in your browser, and the token will be automatically captured and stored.
+- **macOS**: `~/Library/Application Support/meta-ads-mcp/meta_ads_debug.log`
+- **Windows**: `%APPDATA%\meta-ads-mcp\meta_ads_debug.log` 
+- **Linux**: `~/.config/meta-ads-mcp/meta_ads_debug.log`
 
-2. **Command Line Authentication**
+### Common Issues
 
-   You can authenticate directly from the command line:
+#### App ID Issues
 
-   ```bash
-   uvx meta-ads-mcp --login --app-id YOUR_APP_ID
-   ```
+If you encounter errors like `(#200) Provide valid app ID`, check the following:
 
-### Token Caching
+1. Ensure you've set up a Meta Developer App correctly
+2. Verify that you're passing the correct App ID using one of these methods:
+   - Set the `META_APP_ID` environment variable: `export META_APP_ID=your_app_id`
+   - Pass it as a command-line argument: `meta-ads-mcp --app-id your_app_id`
 
-Tokens are cached in a platform-specific secure location:
-- Windows: `%APPDATA%\meta-ads-mcp\token_cache.json`
-- macOS: `~/Library/Application Support/meta-ads-mcp/token_cache.json`
-- Linux: `~/.config/meta-ads-mcp/token_cache.json`
+#### Authentication Errors
 
-You do not need to provide your access token for each command; it will be automatically retrieved from the cache.
+Authentication errors can be tracked in the log file. Check for:
+- Token expiration issues
+- App permission problems
+- Connection errors
 
-## Environment Variables
+### Debugging Command
 
-You can set the following environment variables instead of passing them as arguments:
+For specific image download issues, use the built-in diagnostic tool:
 
-- `META_APP_ID`: Your Meta App ID (Client ID)
+```python
+# Using direct tool call
+mcp_meta_ads_debug_image_download(ad_id="your_ad_id")
+```
+
+This will give you detailed information about the download process and potential issues.
+
+## Running with Different App IDs
+
+If you need to use different Meta App IDs for different purposes:
+
+```bash
+# Using environment variable
+export META_APP_ID=your_app_id
+uvx meta-ads-mcp
+
+# Or using command line argument
+uvx meta-ads-mcp --app-id=your_app_id
+```
+
+## Privacy and Security
+
+The Meta Ads MCP follows security best practices:
+
+1. Tokens are cached in a platform-specific secure location:
+   - Windows: `%APPDATA%\meta-ads-mcp\token_cache.json`
+   - macOS: `~/Library/Application Support/meta-ads-mcp/token_cache.json`
+   - Linux: `~/.config/meta-ads-mcp/token_cache.json`
+
+2. You do not need to provide your access token for each command; it will be automatically retrieved from the cache.
+
+3. You can set the following environment variables instead of passing them as arguments:
+   - `META_APP_ID`: Your Meta App ID (Client ID)
 
 ## Testing
 

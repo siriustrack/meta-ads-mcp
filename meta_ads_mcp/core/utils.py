@@ -7,6 +7,49 @@ from PIL import Image as PILImage
 import base64
 import time
 import asyncio
+import os
+import json
+import logging
+import pathlib
+import platform
+
+# Configure logging to file
+def setup_logging():
+    """Set up logging to file for troubleshooting."""
+    # Get platform-specific path for logs
+    if platform.system() == "Windows":
+        base_path = pathlib.Path(os.environ.get("APPDATA", ""))
+    elif platform.system() == "Darwin":  # macOS
+        base_path = pathlib.Path.home() / "Library" / "Application Support"
+    else:  # Assume Linux/Unix
+        base_path = pathlib.Path.home() / ".config"
+    
+    # Create directory if it doesn't exist
+    log_dir = base_path / "meta-ads-mcp"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    log_file = log_dir / "meta_ads_debug.log"
+    
+    # Configure file logger
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        filename=str(log_file),
+        filemode='a'  # Append mode
+    )
+    
+    # Create a logger
+    logger = logging.getLogger("meta-ads-mcp")
+    logger.setLevel(logging.DEBUG)
+    
+    # Log startup information
+    logger.info(f"Logging initialized. Log file: {log_file}")
+    logger.info(f"Platform: {platform.system()} {platform.release()}")
+    
+    return logger
+
+# Create the logger instance to be imported by other modules
+logger = setup_logging()
 
 # Global store for ad creative images
 ad_creative_images = {}

@@ -26,15 +26,8 @@ META_GRAPH_API_VERSION = "v20.0"
 META_GRAPH_API_BASE = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}"
 USER_AGENT = "meta-ads-mcp/1.0"
 
-# Meta App configuration - Using a placeholder app ID. This will be overridden by:
-# 1. Command line arguments
-# 2. Environment variables 
-# 3. User input during runtime
-META_APP_ID = "YOUR_META_APP_ID"  # Will be replaced at runtime
-
-# Try to load from environment variable
-if os.environ.get("META_APP_ID"):
-    META_APP_ID = os.environ.get("META_APP_ID")
+# Meta App configuration 
+META_APP_ID = os.environ.get("META_APP_ID", "")  # Default to empty string
 
 # Auth constants
 AUTH_SCOPE = "ads_management,ads_read,business_management"
@@ -54,6 +47,35 @@ callback_server_running = False
 callback_server_port = None
 # Global token container for communication between threads
 token_container = {"token": None, "expires_in": None, "user_id": None}
+
+# Configuration class to store app ID and other config
+class MetaConfig:
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(MetaConfig, cls).__new__(cls)
+            cls._instance.app_id = os.environ.get("META_APP_ID", "")  # Default from env
+            cls._instance.initialized = False
+        return cls._instance
+    
+    def set_app_id(self, app_id):
+        """Set app ID from CLI or other source"""
+        if app_id:
+            print(f"Setting Meta App ID: {app_id}")
+            self.app_id = app_id
+            self.initialized = True
+    
+    def get_app_id(self):
+        """Get current app ID"""
+        return self.app_id
+        
+    def is_configured(self):
+        """Check if app has been configured with valid app ID"""
+        return bool(self.app_id)
+
+# Create global config instance
+meta_config = MetaConfig()
 
 # Callback Handler class definition
 class CallbackHandler(BaseHTTPRequestHandler):
@@ -302,8 +324,8 @@ class AuthManager:
         """Clear the current token and remove from cache"""
         self.invalidate_token()
 
-# Initialize auth manager
-auth_manager = AuthManager(META_APP_ID)
+# Initialize auth manager with app_id from config
+auth_manager = AuthManager(meta_config.get_app_id())
 
 # Function to get token without requiring it as a parameter
 async def get_current_access_token() -> Optional[str]:
@@ -314,6 +336,24 @@ async def get_current_access_token() -> Optional[str]:
         Current access token or None if not available
     """
     return auth_manager.get_access_token()
+
+# Function to get current app ID from all possible sources
+def get_current_app_id():
+    """Get the current app ID from MetaConfig."""
+    # First try to get from our singleton config
+    app_id = meta_config.get_app_id()
+    if app_id:
+        return app_id
+    
+    # If not in config yet, check environment as fallback
+    env_app_id = os.environ.get("META_APP_ID", "")
+    if env_app_id:
+        # Update config for future use
+        meta_config.set_app_id(env_app_id)
+        return env_app_id
+    
+    # Last resort, return empty string
+    return ""
 
 class GraphAPIError(Exception):
     """Exception raised for errors from the Graph API."""
@@ -345,6 +385,17 @@ async def make_api_request(
     Returns:
         API response as a dictionary
     """
+    # Validate access token before proceeding
+    if not access_token:
+        print("API request attempted with blank access token")
+        return {
+            "error": "Authentication Required",
+            "details": {
+                "message": "A valid access token is required to access the Meta API",
+                "action_required": "Please authenticate first"
+            }
+        }
+        
     url = f"{META_GRAPH_API_BASE}/{endpoint}"
     
     headers = {
@@ -391,6 +442,19 @@ async def make_api_request(
                 # Check for specific FB API errors related to auth
                 if isinstance(error_obj, dict) and error_obj.get("code") in [190, 102, 4, 200, 10]:
                     print(f"Detected Facebook API auth error: {error_obj.get('code')}")
+                    # For app ID errors, provide more useful error message
+                    if error_obj.get("code") == 200 and "Provide valid app ID" in error_obj.get("message", ""):
+                        print("Meta API authentication configuration issue")
+                        app_id = auth_manager.app_id
+                        print(f"Current app_id: {app_id}")
+                        return {
+                            "error": f"HTTP Error: {e.response.status_code}",
+                            "details": {
+                                "message": "Meta API authentication configuration issue. Please check your app credentials.",
+                                "original_error": error_obj.get("message"),
+                                "code": error_obj.get("code")
+                            }
+                        }
                     auth_manager.invalidate_token()
             
             return {"error": f"HTTP Error: {e.response.status_code}", "details": error_info}
@@ -403,6 +467,7 @@ async def make_api_request(
 def meta_api_tool(func):
     """Decorator to handle authentication for all Meta API tools"""
     async def wrapper(*args, **kwargs):
+        global needs_authentication
         # Handle various MCP invocation patterns
         if len(args) == 1:
             # MCP might pass a single string argument that contains JSON
@@ -449,14 +514,27 @@ def meta_api_tool(func):
         # If not, try to get it from the auth manager
         if not access_token:
             access_token = await get_current_access_token()
+            if access_token:
+                kwargs['access_token'] = access_token
         
         # If still no token, we need authentication
         if not access_token:
-            global needs_authentication
             needs_authentication = True
             
             # Start the callback server
             port = start_callback_server()
+            
+            # Get current app ID from config
+            current_app_id = meta_config.get_app_id()
+            if not current_app_id:
+                return json.dumps({
+                    "error": "No Meta App ID provided. Please provide a valid app ID via environment variable META_APP_ID or --app-id CLI argument.",
+                    "help": "This is required for authentication with Meta Graph API."
+                }, indent=2)
+                
+            # Update auth manager with current app ID
+            auth_manager.app_id = current_app_id
+            print(f"Using Meta App ID from config: {current_app_id}")
             
             # Update auth manager's redirect URI with the current port
             auth_manager.redirect_uri = f"http://localhost:{port}/callback"
@@ -464,24 +542,16 @@ def meta_api_tool(func):
             # Generate the authentication URL
             login_url = auth_manager.get_auth_url()
             
-            # Create a resource response that includes the markdown link format
-            response = {
-                "error": "Authentication required to use Meta Ads API",
-                "login_url": login_url,
-                "server_status": f"Callback server running on port {port}",
-                "markdown_link": f"[Click here to authenticate with Meta Ads API]({login_url})",
-                "message": "IMPORTANT: Please use the Markdown link format in your response to allow the user to click it.",
-                "instructions_for_llm": "You must present this link as clickable Markdown to the user using the markdown_link format provided.",
-                "note": "After authenticating, the token will be automatically saved."
-            }
-            
-            # Wait a moment to ensure the server is fully started
-            await asyncio.sleep(1)
-            
-            return json.dumps(response, indent=2)
-        
-        # Update kwargs with the token
-        kwargs['access_token'] = access_token
+            # Return a user-friendly authentication required response
+            return json.dumps({
+                "error": "Authentication Required",
+                "details": {
+                    "message": "You need to authenticate with the Meta API before using this tool",
+                    "action_required": "Please authenticate using the link below",
+                    "login_url": login_url,
+                    "markdown_link": f"[Click here to authenticate with Meta Ads API]({login_url})"
+                }
+            }, indent=2)
         
         # Call the original function
         try:
@@ -491,6 +561,17 @@ def meta_api_tool(func):
             if needs_authentication:
                 # Start the callback server
                 port = start_callback_server()
+                
+                # Get current app ID from config
+                current_app_id = meta_config.get_app_id()
+                if not current_app_id:
+                    return json.dumps({
+                        "error": "No Meta App ID provided. Please provide a valid app ID via environment variable META_APP_ID or --app-id CLI argument.",
+                        "help": "This is required for authentication with Meta Graph API."
+                    }, indent=2)
+                    
+                auth_manager.app_id = current_app_id
+                print(f"Using Meta App ID from config: {current_app_id}")
                 
                 # Update auth manager's redirect URI with the current port
                 auth_manager.redirect_uri = f"http://localhost:{port}/callback"
@@ -513,6 +594,28 @@ def meta_api_tool(func):
                 await asyncio.sleep(1)
                 
                 return json.dumps(response, indent=2)
+            
+            # If result is a string (JSON), check for app ID errors and improve them
+            if isinstance(result, str):
+                try:
+                    result_obj = json.loads(result)
+                    if "error" in result_obj and "details" in result_obj and "error" in result_obj["details"]:
+                        error_obj = result_obj["details"].get("error", {})
+                        if isinstance(error_obj, dict) and error_obj.get("code") == 200 and "Provide valid app ID" in error_obj.get("message", ""):
+                            # Replace with more user-friendly message
+                            app_id = auth_manager.app_id
+                            return json.dumps({
+                                "error": "Meta API Configuration Issue",
+                                "details": {
+                                    "message": "Your Meta API app is not properly configured",
+                                    "action_required": "Check your META_APP_ID environment variable",
+                                    "current_app_id": app_id,
+                                    "original_error": error_obj.get("message")
+                                }
+                            }, indent=2)
+                except Exception:
+                    # Not JSON or other parsing error, just continue
+                    pass
             
             return result
         except Exception as e:
@@ -1171,10 +1274,35 @@ async def get_insights(
         breakdown: Optional breakdown dimension (e.g., age, gender, country)
         level: Level of aggregation (ad, adset, campaign, account)
     """
+    # Import logger
+    from meta_ads_mcp.core.utils import logger
+    
+    # Log function call details
+    logger.info(f"get_insights called with object_id: {object_id}, time_range: {time_range}, level: {level}")
+    
+    # Log authentication details
+    from meta_ads_mcp.core.auth import meta_config
+    app_id = meta_config.get_app_id()
+    logger.info(f"App ID from meta_config: {app_id}")
+    
+    # Validate inputs
     if not object_id:
-        return json.dumps({"error": "No object ID provided"}, indent=2)
+        logger.error("No object ID provided for get_insights")
+        return json.dumps({"error": "Missing Required Parameter", "details": {"message": "No object ID provided"}}, indent=2)
         
+    # Check access token (masking for security)
+    token_status = "provided" if access_token else "not provided"
+    logger.info(f"Access token status: {token_status}")
+    
+    # Log the specific object ID format for troubleshooting
+    if object_id.startswith("act_"):
+        logger.info(f"Object ID is an account ID: {object_id}")
+    else:
+        logger.info(f"Object ID format: {object_id}")
+    
     endpoint = f"{object_id}/insights"
+    logger.info(f"Using endpoint: {endpoint}")
+    
     params = {
         "date_preset": time_range,
         "fields": "account_id,account_name,campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,impressions,clicks,spend,cpc,cpm,ctr,reach,frequency,actions,conversions,unique_clicks,cost_per_action_type",
@@ -1184,7 +1312,27 @@ async def get_insights(
     if breakdown:
         params["breakdowns"] = breakdown
     
-    data = await make_api_request(endpoint, access_token, params)
+    logger.info("Making API request for insights")
+    try:
+        data = await make_api_request(endpoint, access_token, params)
+        logger.info(f"API response received: {'success' if 'error' not in data else 'error'}")
+        
+        # Check for specific app ID errors and improve error message
+        if "error" in data:
+            error_details = data.get("details", {}).get("error", {})
+            if isinstance(error_details, dict) and error_details.get("code") == 200:
+                logger.error(f"Authentication configuration error in response: {error_details.get('message')}")
+                return json.dumps({
+                    "error": "Meta API Configuration Issue", 
+                    "details": {
+                        "message": "There is an issue with your Meta API configuration",
+                        "action_required": "Check your META_APP_ID environment variable or re-authenticate",
+                        "current_app_id": app_id
+                    }
+                }, indent=2)
+    except Exception as e:
+        logger.error(f"Exception during get_insights API call: {str(e)}")
+        data = {"error": str(e)}
     
     return json.dumps(data, indent=2)
 
@@ -1521,6 +1669,16 @@ def login():
     """
     print("Starting Meta Ads authentication flow...")
     
+    # Ensure auth_manager has the current app ID from config
+    current_app_id = meta_config.get_app_id()
+    if not current_app_id:
+        print("Error: No Meta App ID available. Authentication will fail.")
+        print("Please provide an app ID using --app-id or via META_APP_ID environment variable.")
+        return
+        
+    auth_manager.app_id = current_app_id
+    print(f"Using Meta App ID from config: {current_app_id}")
+    
     try:
         # Start the callback server first
         port = start_callback_server()
@@ -1672,6 +1830,12 @@ def start_callback_server():
         
         # Update auth manager's redirect URI with new port
         auth_manager.redirect_uri = f"http://localhost:{port}/callback"
+        
+        # Always make sure auth_manager has the current app ID from config
+        current_app_id = meta_config.get_app_id()
+        if current_app_id:
+            auth_manager.app_id = current_app_id
+            
         callback_server_port = port
         
         try:
@@ -1739,9 +1903,17 @@ def login_cli():
     
     args = parser.parse_args()
     
-    # Update app ID if provided
+    # Update app ID if provided via CLI
     if args.app_id:
-        auth_manager.app_id = args.app_id
+        meta_config.set_app_id(args.app_id)
+    else:
+        # Use existing config or environment variable
+        if not meta_config.is_configured():
+            print("Error: No Meta App ID provided. Please provide using --app-id or META_APP_ID environment variable.")
+            return 1
+    
+    # Update auth_manager with app ID from config
+    auth_manager.app_id = meta_config.get_app_id()
     
     if args.force_login:
         # Clear existing token
@@ -1754,7 +1926,7 @@ def login_cli():
 
 def main():
     """
-    Main entry point for the Meta Ads MCP server.
+    Main entry point for the Meta Ads MCP Server.
     This function handles command line arguments and runs the server.
     """
     # Set up command line arguments
@@ -1764,12 +1936,22 @@ def main():
     
     args = parser.parse_args()
     
-    # Update app ID if provided
+    # Update app ID if provided via CLI (highest priority)
     if args.app_id:
-        auth_manager.app_id = args.app_id
+        meta_config.set_app_id(args.app_id)
+    
+    # Ensure auth_manager has the current app ID
+    app_id = get_current_app_id()
+    if app_id:
+        auth_manager.app_id = app_id
+    else:
+        print("Warning: No Meta App ID provided. Authentication will fail.")
     
     # Handle login command
     if args.login:
+        if not meta_config.is_configured():
+            print("Error: Cannot login without a Meta App ID. Please provide using --app-id or META_APP_ID environment variable.")
+            return 1
         login()
     else:
         # Initialize and run the server

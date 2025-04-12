@@ -5,13 +5,19 @@ import json
 import httpx
 import asyncio
 import functools
+import os
 from .auth import needs_authentication, get_current_access_token, auth_manager, start_callback_server
+from .utils import logger
 
 # Constants
 META_GRAPH_API_VERSION = "v20.0"
 META_GRAPH_API_BASE = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}"
 USER_AGENT = "meta-ads-mcp/1.0"
 
+# Log key environment and configuration at startup
+logger.info("Core API module initialized")
+logger.info(f"Graph API Version: {META_GRAPH_API_VERSION}")
+logger.info(f"META_APP_ID env var present: {'Yes' if os.environ.get('META_APP_ID') else 'No'}")
 
 class GraphAPIError(Exception):
     """Exception raised for errors from the Graph API."""
@@ -20,9 +26,14 @@ class GraphAPIError(Exception):
         self.message = error_data.get('message', 'Unknown Graph API error')
         super().__init__(self.message)
         
+        # Log error details
+        logger.error(f"Graph API Error: {self.message}")
+        logger.debug(f"Error details: {error_data}")
+        
         # Check if this is an auth error
         if "code" in error_data and error_data["code"] in [190, 102, 4]:
             # Common auth error codes
+            logger.warning(f"Auth error detected (code: {error_data['code']}). Invalidating token.")
             auth_manager.invalidate_token()
 
 
@@ -44,6 +55,17 @@ async def make_api_request(
     Returns:
         API response as a dictionary
     """
+    # Validate access token before proceeding
+    if not access_token:
+        logger.error("API request attempted with blank access token")
+        return {
+            "error": "Authentication Required",
+            "details": {
+                "message": "A valid access token is required to access the Meta API",
+                "action_required": "Please authenticate first"
+            }
+        }
+        
     url = f"{META_GRAPH_API_BASE}/{endpoint}"
     
     headers = {
@@ -53,10 +75,14 @@ async def make_api_request(
     request_params = params or {}
     request_params["access_token"] = access_token
     
-    # Print the request details (masking the token for security)
+    # Logging the request (masking token for security)
     masked_params = {k: "***TOKEN***" if k == "access_token" else v for k, v in request_params.items()}
-    print(f"Making {method} request to: {url}")
-    print(f"Params: {masked_params}")
+    logger.debug(f"API Request: {method} {url}")
+    logger.debug(f"Request params: {masked_params}")
+    
+    # Check for app_id in params
+    app_id = auth_manager.app_id
+    logger.debug(f"Current app_id from auth_manager: {app_id}")
     
     async with httpx.AsyncClient() as client:
         try:
@@ -70,6 +96,7 @@ async def make_api_request(
                 raise ValueError(f"Unsupported HTTP method: {method}")
             
             response.raise_for_status()
+            logger.debug(f"API Response status: {response.status_code}")
             return response.json()
         
         except httpx.HTTPStatusError as e:
@@ -79,23 +106,36 @@ async def make_api_request(
             except:
                 error_info = {"status_code": e.response.status_code, "text": e.response.text}
             
-            print(f"HTTP Error: {e.response.status_code} - {error_info}")
+            logger.error(f"HTTP Error: {e.response.status_code} - {error_info}")
             
             # Check for authentication errors
             if e.response.status_code == 401 or e.response.status_code == 403:
-                print("Detected authentication error")
+                logger.warning("Detected authentication error (401/403)")
                 auth_manager.invalidate_token()
             elif "error" in error_info:
                 error_obj = error_info.get("error", {})
                 # Check for specific FB API errors related to auth
                 if isinstance(error_obj, dict) and error_obj.get("code") in [190, 102, 4, 200, 10]:
-                    print(f"Detected Facebook API auth error: {error_obj.get('code')}")
+                    logger.warning(f"Detected Facebook API auth error: {error_obj.get('code')}")
+                    # Log more details about app ID related errors
+                    if error_obj.get("code") == 200 and "Provide valid app ID" in error_obj.get("message", ""):
+                        logger.error("Meta API authentication configuration issue")
+                        logger.error(f"Current app_id: {app_id}")
+                        # Provide a clearer error message without the confusing "Provide valid app ID" message
+                        return {
+                            "error": f"HTTP Error: {e.response.status_code}",
+                            "details": {
+                                "message": "Meta API authentication configuration issue. Please check your app credentials.",
+                                "original_error": error_obj.get("message"),
+                                "code": error_obj.get("code")
+                            }
+                        }
                     auth_manager.invalidate_token()
             
             return {"error": f"HTTP Error: {e.response.status_code}", "details": error_info}
         
         except Exception as e:
-            print(f"Request Error: {str(e)}")
+            logger.error(f"Request Error: {str(e)}")
             return {"error": str(e)}
 
 
@@ -105,21 +145,76 @@ def meta_api_tool(func):
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
         try:
+            # Log function call
+            logger.debug(f"Function call: {func.__name__}")
+            logger.debug(f"Args: {args}")
+            # Log kwargs without sensitive info
+            safe_kwargs = {k: ('***TOKEN***' if k == 'access_token' else v) for k, v in kwargs.items()}
+            logger.debug(f"Kwargs: {safe_kwargs}")
+            
+            # Log app ID information
+            app_id = auth_manager.app_id
+            logger.debug(f"Current app_id: {app_id}")
+            logger.debug(f"META_APP_ID env var: {os.environ.get('META_APP_ID')}")
+            
             # If access_token is not in kwargs, try to get it from auth_manager
             if 'access_token' not in kwargs or not kwargs['access_token']:
                 try:
-                    access_token = await auth_manager.get_current_access_token()
+                    access_token = await get_current_access_token()
                     if access_token:
                         kwargs['access_token'] = access_token
+                        logger.debug("Using access token from auth_manager")
+                    else:
+                        logger.warning("No access token available from auth_manager")
                 except Exception as e:
-                    pass
-
+                    logger.error(f"Error getting access token: {str(e)}")
+            
+            # Final validation - if we still don't have a valid token, return authentication required
             if 'access_token' not in kwargs or not kwargs['access_token']:
-                needs_authentication = True
+                logger.warning("No access token available, authentication needed")
+                auth_url = auth_manager.get_auth_url()
+                return json.dumps({
+                    "error": "Authentication Required",
+                    "details": {
+                        "message": "You need to authenticate with the Meta API before using this tool",
+                        "action_required": "Please authenticate first",
+                        "auth_url": auth_url,
+                        "markdown_link": f"[Click here to authenticate with Meta Ads API]({auth_url})"
+                    }
+                }, indent=2)
                 
             # Call the original function
-            return await func(*args, **kwargs)
+            result = await func(*args, **kwargs)
+            
+            # If the result is a string (JSON), try to parse it to check for errors
+            if isinstance(result, str):
+                try:
+                    result_dict = json.loads(result)
+                    if "error" in result_dict:
+                        logger.error(f"Error in API response: {result_dict['error']}")
+                        # If this is an app ID error, log more details
+                        if isinstance(result_dict.get("details", {}).get("error", {}), dict):
+                            error_obj = result_dict["details"]["error"]
+                            if error_obj.get("code") == 200 and "Provide valid app ID" in error_obj.get("message", ""):
+                                logger.error("Meta API authentication configuration issue")
+                                logger.error(f"Current app_id: {app_id}")
+                                # Replace the confusing error with a more user-friendly one
+                                return json.dumps({
+                                    "error": "Meta API Configuration Issue",
+                                    "details": {
+                                        "message": "Your Meta API app is not properly configured",
+                                        "action_required": "Check your META_APP_ID environment variable",
+                                        "current_app_id": app_id,
+                                        "original_error": error_obj.get("message")
+                                    }
+                                }, indent=2)
+                except Exception:
+                    # Not JSON or other parsing error, just continue
+                    pass
+                
+            return result
         except Exception as e:
+            logger.error(f"Error in {func.__name__}: {str(e)}")
             return {"error": str(e)}
     
     return wrapper 
