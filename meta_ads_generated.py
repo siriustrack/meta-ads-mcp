@@ -401,44 +401,29 @@ def meta_api_tool(func):
     """Decorator to handle authentication for all Meta API tools"""
     async def wrapper(*args, **kwargs):
         # Handle various MCP invocation patterns
-        if len(args) == 1:
-            # MCP might pass a single string argument that contains JSON
-            if isinstance(args[0], str):
-                try:
-                    # Try to parse the single string argument as JSON dictionary
-                    parsed_kwargs = json.loads(args[0]) if args[0] else {}
-                    # Clear args and use parsed_kwargs
-                    args = ()
-                    kwargs.update(parsed_kwargs)
-                except Exception:
-                    pass
-            # MCP might also pass a single dictionary argument
-            elif isinstance(args[0], dict):
-                # Treat the dict as kwargs
-                kwargs.update(args[0])
-                args = ()
-        
-        # Check if we have a 'kwargs' parameter, which means MCP is nesting the real parameters
-        if 'kwargs' in kwargs and isinstance(kwargs['kwargs'], (str, dict)):
-            # If it's a string, try to parse as JSON
-            if isinstance(kwargs['kwargs'], str):
-                try:
-                    parsed_inner_kwargs = json.loads(kwargs['kwargs']) if kwargs['kwargs'] else {}
-                    kwargs.update(parsed_inner_kwargs)
-                except Exception:
-                    # If parsing fails, just keep the original kwargs
-                    pass
-            # If it's already a dict, just update kwargs
-            elif isinstance(kwargs['kwargs'], dict):
-                kwargs.update(kwargs['kwargs'])
-            
-            # Remove the 'kwargs' parameter to avoid confusion
-            del kwargs['kwargs']
-            
-        # Handle 'args' parameter if it exists
-        if 'args' in kwargs:
-            # We don't use positional args, so just remove it
-            del kwargs['args']
+        if len(args) == 1 and isinstance(args[0], str):
+            # If it's a string and looks like JSON, try to parse it
+            try:
+                parsed = json.loads(args[0]) if args[0] else {}
+                if isinstance(parsed, dict):
+                    # If it has an 'args' key, use that for positional args
+                    if 'args' in parsed:
+                        args = (parsed['args'],)
+                    # If it has a 'kwargs' key, update kwargs
+                    if 'kwargs' in parsed:
+                        if isinstance(parsed['kwargs'], str):
+                            try:
+                                kwargs.update(json.loads(parsed['kwargs']))
+                            except:
+                                pass
+                        elif isinstance(parsed['kwargs'], dict):
+                            kwargs.update(parsed['kwargs'])
+                else:
+                    # If it's not a dict, treat it as a single positional arg
+                    args = (args[0],)
+            except:
+                # If parsing fails, treat it as a single positional arg
+                args = (args[0],)
         
         # Check if access_token is provided in kwargs
         access_token = kwargs.get('access_token')
@@ -482,7 +467,7 @@ def meta_api_tool(func):
         
         # Call the original function
         try:
-            result = await func(**kwargs)
+            result = await func(*args, **kwargs)
             
             # If authentication is needed after the call (e.g., token was invalidated)
             if needs_authentication:
@@ -737,14 +722,23 @@ async def get_adsets(access_token: str = None, account_id: str = None, limit: in
 
 @mcp_server.tool()
 @meta_api_tool
-async def get_adset_details(access_token: str = None, adset_id: str = None) -> str:
+async def get_adset_details(args: str = "", kwargs: str = "", access_token: str = None) -> str:
     """
     Get detailed information about a specific ad set.
     
     Args:
+        adset_id: Meta Ads ad set ID (required)
         access_token: Meta API access token (optional - will use cached token if not provided)
-        adset_id: Meta Ads ad set ID
+    
+    Example:
+        To call this function through MCP, pass the adset_id as the first argument:
+        {
+            "args": "YOUR_ADSET_ID"
+        }
     """
+    # Extract adset_id from args
+    adset_id = args
+    
     if not adset_id:
         return json.dumps({"error": "No ad set ID provided"}, indent=2)
     
