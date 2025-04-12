@@ -1,0 +1,34 @@
+"""Core functionality for Meta Ads API MCP package."""
+
+from .server import mcp_server
+from .accounts import get_ad_accounts, get_account_info
+from .campaigns import get_campaigns, get_campaign_details, create_campaign
+from .adsets import get_adsets, get_adset_details, update_adset
+from .ads import get_ads, get_ad_details, get_ad_creatives, get_ad_image
+from .insights import get_insights, debug_image_download, save_ad_image_via_api
+from .authentication import get_login_link
+from .server import login_cli, main
+from .auth import login
+
+__all__ = [
+    'mcp_server',
+    'get_ad_accounts',
+    'get_account_info',
+    'get_campaigns',
+    'get_campaign_details',
+    'create_campaign',
+    'get_adsets',
+    'get_adset_details',
+    'update_adset',
+    'get_ads',
+    'get_ad_details',
+    'get_ad_creatives',
+    'get_ad_image',
+    'get_insights',
+    'debug_image_download',
+    'save_ad_image_via_api',
+    'get_login_link',
+    'login_cli',
+    'login',
+    'main',
+] 
