@@ -3,8 +3,10 @@
 import json
 from typing import Optional
 from .api import meta_api_tool, make_api_request
+from .server import mcp_server
 
 
+@mcp_server.tool()
 @meta_api_tool
 async def get_ad_accounts(access_token: str = None, user_id: str = "me", limit: int = 10) -> str:
     """
