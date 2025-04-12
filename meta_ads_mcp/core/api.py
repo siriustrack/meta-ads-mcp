@@ -129,18 +129,33 @@ def meta_api_tool(func):
                 # If parsing fails, treat it as a single positional arg
                 args = (args[0],)
         
+        # Debug print the effective args and kwargs
+        print(f"DEBUG: meta_api_tool wrapper called for {func.__name__}")
+        print(f"DEBUG: args: {args}")
+        print(f"DEBUG: kwargs: {kwargs}")
+        
         # Check if access_token is provided in kwargs
         access_token = kwargs.get('access_token')
         
         # If not, try to get it from the auth manager
         if not access_token:
-            access_token = await get_current_access_token()
+            try:
+                print("DEBUG: No access_token in kwargs, trying to get from auth_manager")
+                access_token = await get_current_access_token()
+                if access_token:
+                    print(f"DEBUG: Got token from auth_manager (first 10 chars): {access_token[:10]}")
+                else:
+                    print("DEBUG: No token available from auth_manager")
+                    # Set the global flag to indicate authentication is needed
+                    global needs_authentication
+                    needs_authentication = True
+            except Exception as e:
+                print(f"DEBUG: Error getting token: {e}")
+                needs_authentication = True
         
         # If still no token, we need authentication
-        if not access_token:
-            global needs_authentication
-            needs_authentication = True
-            
+        if not access_token or needs_authentication:
+            print("DEBUG: Initiating authentication flow")
             # Start the callback server
             port = start_callback_server()
             
@@ -166,7 +181,7 @@ def meta_api_tool(func):
             
             return json.dumps(response, indent=2)
         
-        # Update kwargs with the token
+        # Update kwargs with the token (this section won't be reached right now)
         kwargs['access_token'] = access_token
         
         # Call the original function

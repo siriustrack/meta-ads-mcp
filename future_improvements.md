@@ -1,5 +1,32 @@
 # Future Improvements for Meta Ads MCP
 
+## Access token should remain internal only
+
+Don't share it ever with the LLM, only update the auth cache.
+
+## Frequency Cap Visibility Issue
+
+Currently, our tools are unable to view frequency cap settings after they are applied to ad sets. While we can set frequency caps through the `update_adset` function, the subsequent API calls (`get_adsets`, `get_adset_details`) do not show these settings in their responses. This makes it difficult to verify if frequency caps were successfully applied. We need to:
+
+1. Investigate why frequency cap settings are not visible in API responses
+2. Determine if this is a limitation of the Meta Marketing API
+3. Consider adding alternative ways to verify frequency cap settings (e.g., monitoring actual frequency metrics over time)
+4. Update our documentation to clarify this limitation
+
+## JSON File Dependency for Ad Set Updates
+
+Currently, the `update_adset` function requires reading from a JSON file to apply changes to ad sets. This is not ideal because:
+
+1. It requires maintaining separate JSON files for different update configurations
+2. It makes the update process less transparent and harder to debug
+3. It's not user-friendly for quick updates or changes
+
+We should improve this by:
+1. Allowing direct parameter passing for ad set updates
+2. Supporting both JSON file and direct parameter methods
+3. Adding better validation and error handling for update parameters
+4. Providing clear documentation for both update methods
+
 ## Planned Improvement: Ad Set Update Confirmation Flow
 
 ### Overview

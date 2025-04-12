@@ -265,8 +265,8 @@ class CallbackHandler(BaseHTTPRequestHandler):
             <head>
                 <title>Confirm Ad Set Update</title>
                 <style>
-                    body { font-family: Arial, sans-serif; margin: 20px; }
-                    .warning { color: #d73a49; margin: 20px 0; }
+                    body { font-family: Arial, sans-serif; margin: 20px; max-width: 1000px; margin: 0 auto; }
+                    .warning { color: #d73a49; margin: 20px 0; padding: 15px; border-left: 4px solid #d73a49; background-color: #fff8f8; }
                     .changes { background: #f6f8fa; padding: 15px; border-radius: 6px; }
                     .buttons { margin-top: 20px; }
                     button { padding: 10px 20px; margin-right: 10px; border-radius: 6px; cursor: pointer; }
@@ -275,6 +275,10 @@ class CallbackHandler(BaseHTTPRequestHandler):
                     .diff-table { width: 100%; border-collapse: collapse; margin: 15px 0; }
                     .diff-table td { padding: 8px; border: 1px solid #ddd; }
                     .diff-table .header { background: #f1f8ff; font-weight: bold; }
+                    .status { padding: 15px; margin-top: 20px; border-radius: 6px; display: none; }
+                    .success { background-color: #e6ffed; border: 1px solid #2ea44f; color: #22863a; }
+                    .error { background-color: #ffeef0; border: 1px solid #d73a49; color: #d73a49; }
+                    pre { white-space: pre-wrap; word-break: break-all; }
                 </style>
             </head>
             <body>
@@ -292,13 +296,30 @@ class CallbackHandler(BaseHTTPRequestHandler):
                         <tr class="header">
                             <td>Setting</td>
                             <td>New Value</td>
+                            <td>Description</td>
                         </tr>
-                        """ + "\n".join(f"""
+                        """
+            
+            # Special handling for frequency_control_specs
+            for k, v in changes_dict.items():
+                description = ""
+                if k == "frequency_control_specs" and isinstance(v, list) and len(v) > 0:
+                    spec = v[0]
+                    if all(key in spec for key in ["event", "interval_days", "max_frequency"]):
+                        description = f"Cap to {spec['max_frequency']} {spec['event'].lower()} per {spec['interval_days']} days"
+                
+                # Format the value for display
+                display_value = json.dumps(v, indent=2) if isinstance(v, (dict, list)) else str(v)
+                
+                html += f"""
                         <tr>
                             <td>{k}</td>
-                            <td>{v}</td>
+                            <td><pre>{display_value}</pre></td>
+                            <td>{description}</td>
                         </tr>
-                        """ for k, v in changes_dict.items()) + """
+                        """
+            
+            html += """
                     </table>
                 </div>
                 
@@ -306,9 +327,29 @@ class CallbackHandler(BaseHTTPRequestHandler):
                     <button class="approve" onclick="approveChanges()">Approve Changes</button>
                     <button class="cancel" onclick="cancelChanges()">Cancel</button>
                 </div>
+                
+                <div id="status" class="status"></div>
 
                 <script>
+                    function showStatus(message, isError = false) {
+                        const statusElement = document.getElementById('status');
+                        statusElement.textContent = message;
+                        statusElement.style.display = 'block';
+                        if (isError) {
+                            statusElement.classList.add('error');
+                            statusElement.classList.remove('success');
+                        } else {
+                            statusElement.classList.add('success');
+                            statusElement.classList.remove('error');
+                        }
+                    }
+                    
                     function approveChanges() {
+                        showStatus("Processing update...");
+                        
+                        const buttons = document.querySelectorAll('button');
+                        buttons.forEach(button => button.disabled = true);
+                        
                         fetch('/update-confirm?' + new URLSearchParams({
                             adset_id: '""" + adset_id + """',
                             token: '""" + token + """',
@@ -317,22 +358,35 @@ class CallbackHandler(BaseHTTPRequestHandler):
                         }))
                         .then(response => response.json())
                         .then(data => {
-                            alert('Changes approved and applied successfully!');
-                            window.close();
+                            if (data.error) {
+                                showStatus('Error applying changes: ' + data.error, true);
+                                buttons.forEach(button => button.disabled = false);
+                            } else {
+                                showStatus('Changes approved and will be applied shortly!');
+                                setTimeout(() => {
+                                    window.location.href = '/verify-update?' + new URLSearchParams({
+                                        adset_id: '""" + adset_id + """',
+                                        token: '""" + token + """'
+                                    });
+                                }, 3000);
+                            }
                         })
                         .catch(error => {
-                            alert('Error applying changes: ' + error);
+                            showStatus('Error applying changes: ' + error, true);
+                            buttons.forEach(button => button.disabled = false);
                         });
                     }
                     
                     function cancelChanges() {
+                        showStatus("Cancelling update...");
+                        
                         fetch('/update-confirm?' + new URLSearchParams({
                             adset_id: '""" + adset_id + """',
                             action: 'cancel'
                         }))
                         .then(() => {
-                            alert('Update cancelled.');
-                            window.close();
+                            showStatus('Update cancelled.');
+                            setTimeout(() => window.close(), 2000);
                         });
                     }
                 </script>
@@ -340,6 +394,119 @@ class CallbackHandler(BaseHTTPRequestHandler):
             </html>
             """
             self.wfile.write(html.encode())
+            return
+        
+        if self.path.startswith("/verify-update"):
+            # Parse query parameters
+            query = parse_qs(urlparse(self.path).query)
+            adset_id = query.get("adset_id", [""])[0]
+            token = query.get("token", [""])[0]
+            
+            # Respond with a verification page
+            self.send_response(200)
+            self.send_header("Content-type", "text/html")
+            self.end_headers()
+            
+            html = """
+            <html>
+            <head>
+                <title>Verifying Ad Set Update</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 20px; max-width: 800px; margin: 0 auto; }
+                    .status { padding: 15px; margin-top: 20px; border-radius: 6px; }
+                    .loading { background-color: #f1f8ff; border: 1px solid #0366d6; }
+                    .success { background-color: #e6ffed; border: 1px solid #2ea44f; color: #22863a; }
+                    .error { background-color: #ffeef0; border: 1px solid #d73a49; color: #d73a49; }
+                    .details { background: #f6f8fa; padding: 15px; border-radius: 6px; margin-top: 20px; }
+                    pre { white-space: pre-wrap; word-break: break-all; }
+                    .spinner { display: inline-block; width: 20px; height: 20px; border: 3px solid rgba(0, 0, 0, 0.1); border-radius: 50%; border-top-color: #0366d6; animation: spin 1s ease-in-out infinite; margin-right: 10px; }
+                    @keyframes spin { to { transform: rotate(360deg); } }
+                </style>
+            </head>
+            <body>
+                <h1>Verifying Ad Set Update</h1>
+                <p>Checking the status of your update for Ad Set <strong>""" + adset_id + """</strong></p>
+                
+                <div id="status" class="status loading">
+                    <div class="spinner"></div> Verifying update...
+                </div>
+                
+                <div id="details" class="details" style="display: none;">
+                    <h3>Updated Ad Set Details:</h3>
+                    <pre id="adset-details">Loading...</pre>
+                </div>
+
+                <script>
+                    // Function to fetch the ad set details and check if frequency_control_specs was updated
+                    async function verifyUpdate() {
+                        try {
+                            const response = await fetch('/api/adset?' + new URLSearchParams({
+                                adset_id: '""" + adset_id + """',
+                                token: '""" + token + """'
+                            }));
+                            
+                            const data = await response.json();
+                            const statusElement = document.getElementById('status');
+                            const detailsElement = document.getElementById('details');
+                            const adsetDetailsElement = document.getElementById('adset-details');
+                            
+                            detailsElement.style.display = 'block';
+                            adsetDetailsElement.textContent = JSON.stringify(data, null, 2);
+                            
+                            if (data.frequency_control_specs && data.frequency_control_specs.length > 0) {
+                                statusElement.classList.remove('loading');
+                                statusElement.classList.add('success');
+                                statusElement.innerHTML = '✅ Update successful! Frequency cap has been set.';
+                            } else {
+                                statusElement.classList.remove('loading');
+                                statusElement.classList.add('error');
+                                statusElement.innerHTML = '❌ Update may not have been applied. No frequency cap found in the ad set.';
+                            }
+                        } catch (error) {
+                            const statusElement = document.getElementById('status');
+                            statusElement.classList.remove('loading');
+                            statusElement.classList.add('error');
+                            statusElement.textContent = 'Error verifying update: ' + error;
+                        }
+                    }
+                    
+                    // Wait a moment before verifying
+                    setTimeout(verifyUpdate, 3000);
+                </script>
+            </body>
+            </html>
+            """
+            self.wfile.write(html.encode())
+            return
+            
+        if self.path.startswith("/api/adset"):
+            # Parse query parameters
+            query = parse_qs(urlparse(self.path).query)
+            adset_id = query.get("adset_id", [""])[0]
+            token = query.get("token", [""])[0]
+            
+            from .api import make_api_request
+            
+            # Call the Graph API directly
+            async def get_adset_data():
+                endpoint = f"{adset_id}"
+                params = {
+                    "fields": "id,name,campaign_id,status,daily_budget,lifetime_budget,targeting,bid_amount,bid_strategy,optimization_goal,billing_event,start_time,end_time,created_time,updated_time,attribution_spec,destination_type,promoted_object,pacing_type,budget_remaining,frequency_control_specs"
+                }
+                
+                return await make_api_request(endpoint, token, params)
+            
+            # Run the async function
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(get_adset_data())
+            loop.close()
+            
+            # Return the result
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(result, indent=2).encode())
             return
         
         if self.path.startswith("/update-confirm"):
@@ -365,7 +532,35 @@ class CallbackHandler(BaseHTTPRequestHandler):
                     "changes": changes
                 }
                 
-                self.wfile.write(json.dumps({"status": "approved"}).encode())
+                # Prepare the API call to actually execute the update
+                from .api import make_api_request
+                
+                # Function to perform the actual update
+                async def perform_update():
+                    try:
+                        changes_dict = json.loads(changes)
+                        endpoint = f"{adset_id}"
+                        
+                        # Create a copy of changes_dict for the API call
+                        api_params = dict(changes_dict)
+                        api_params["access_token"] = token
+                        
+                        # Make the API request to update the ad set
+                        result = await make_api_request(endpoint, token, api_params, method="POST")
+                        return {"status": "approved", "api_result": result}
+                    except Exception as e:
+                        return {"status": "error", "error": str(e)}
+                
+                # Run the async function
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    result = loop.run_until_complete(perform_update())
+                    loop.close()
+                    
+                    self.wfile.write(json.dumps(result).encode())
+                except Exception as e:
+                    self.wfile.write(json.dumps({"status": "error", "error": str(e)}).encode())
             else:
                 # Store the cancellation
                 update_confirmation = {
@@ -391,6 +586,11 @@ class CallbackHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"Token received")
             
+            # Debug prints
+            print("DEBUG: Token received from Facebook")
+            print(f"DEBUG: Token value (first 10 chars): {token_container['token'][:10] if token_container['token'] else 'None'}")
+            print(f"DEBUG: Expires in: {token_container['expires_in']}")
+            
             # Process the token (save it) immediately
             if token_container["token"]:
                 # Create token info and save to cache
@@ -398,13 +598,30 @@ class CallbackHandler(BaseHTTPRequestHandler):
                     access_token=token_container["token"],
                     expires_in=token_container["expires_in"]
                 )
-                auth_manager.token_info = token_info
-                auth_manager._save_token_to_cache()
+                
+                print(f"DEBUG: Created TokenInfo object with access_token (first 10 chars): {token_info.access_token[:10] if token_info.access_token else 'None'}")
+                print(f"DEBUG: TokenInfo expires_in: {token_info.expires_in}")
+                
+                # Set token in auth_manager
+                if 'auth_manager' in globals():
+                    auth_manager.token_info = token_info
+                    print("DEBUG: Set token_info in auth_manager")
+                else:
+                    print("DEBUG: ERROR - auth_manager not in globals!")
+                
+                try:
+                    # Save to cache
+                    auth_manager._save_token_to_cache()
+                    print(f"DEBUG: Saved token to cache at {auth_manager._get_token_cache_path()}")
+                except Exception as e:
+                    print(f"DEBUG: ERROR saving token to cache: {str(e)}")
                 
                 # Reset auth needed flag
                 needs_authentication = False
                 
-                print(f"Token received and cached (expires in {token_container['expires_in']} seconds)")
+                print(f"DEBUG: Token processed, needs_authentication = {needs_authentication}")
+            else:
+                print("DEBUG: ERROR - Received empty token from Facebook")
             return
     
     # Silence server logs
@@ -501,7 +718,30 @@ async def get_current_access_token() -> Optional[str]:
     Returns:
         Current access token or None if not available
     """
-    return auth_manager.get_access_token()
+    print("DEBUG: get_current_access_token called")
+    
+    if auth_manager:
+        token = auth_manager.get_access_token()
+        if token:
+            print(f"DEBUG: Returned token from auth_manager (first 10 chars): {token[:10]}")
+        else:
+            print("DEBUG: No token available from auth_manager")
+            
+        # Check if token is in token_container but not in auth_manager
+        if token_container and token_container.get("token") and not token:
+            print("DEBUG: Found token in token_container but not in auth_manager, updating...")
+            token_info = TokenInfo(
+                access_token=token_container["token"],
+                expires_in=token_container.get("expires_in")
+            )
+            auth_manager.token_info = token_info
+            auth_manager._save_token_to_cache()
+            return token_container["token"]
+            
+        return token
+    else:
+        print("DEBUG: auth_manager is not initialized")
+        return None
 
 
 def login():

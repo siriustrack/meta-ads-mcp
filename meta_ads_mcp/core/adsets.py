@@ -33,7 +33,7 @@ async def get_adsets(access_token: str = None, account_id: str = None, limit: in
     
     endpoint = f"{account_id}/adsets"
     params = {
-        "fields": "id,name,campaign_id,status,daily_budget,lifetime_budget,targeting,bid_amount,bid_strategy,optimization_goal,billing_event,start_time,end_time,created_time,updated_time",
+        "fields": "id,name,campaign_id,status,daily_budget,lifetime_budget,targeting,bid_amount,bid_strategy,optimization_goal,billing_event,start_time,end_time,created_time,updated_time,frequency_control_specs",
         "limit": limit
     }
     
@@ -66,7 +66,7 @@ async def get_adset_details(access_token: str = None, adset_id: str = None) -> s
     
     endpoint = f"{adset_id}"
     params = {
-        "fields": "id,name,campaign_id,status,daily_budget,lifetime_budget,targeting,bid_amount,bid_strategy,optimization_goal,billing_event,start_time,end_time,created_time,updated_time,attribution_spec,destination_type,promoted_object,pacing_type,budget_remaining"
+        "fields": "id,name,campaign_id,status,daily_budget,lifetime_budget,targeting,bid_amount,bid_strategy,optimization_goal,billing_event,start_time,end_time,created_time,updated_time,attribution_spec,destination_type,promoted_object,pacing_type,budget_remaining,frequency_control_specs{event,interval_days,max_frequency}"
     }
     
     data = await make_api_request(endpoint, access_token, params)
@@ -95,25 +95,42 @@ async def update_adset(args: str = "", kwargs: str = None, access_token: str = N
     if not adset_id:
         return json.dumps({"error": "No ad set ID provided"}, indent=2)
     
+    # Debug print
+    print(f"DEBUG: update_adset called with adset_id: {adset_id}")
+    print(f"DEBUG: kwargs type: {type(kwargs)}, value: {kwargs}")
+    
     # Try to read parameters from file if not provided
     if not kwargs:
         try:
             with open('frequency_cap.json', 'r') as f:
                 kwargs = f.read().strip()
+                print(f"DEBUG: Read kwargs from file: {kwargs}")
         except (FileNotFoundError, IOError):
             # If file doesn't exist, use default empty object
             kwargs = "{}"
     
-    # Extract optional parameters
+    # Convert kwargs to dictionary
     try:
-        if isinstance(kwargs, (dict, list)):
+        if isinstance(kwargs, dict):
             kwargs_dict = kwargs
+            print("DEBUG: kwargs is already a dictionary")
+        elif isinstance(kwargs, str):
+            # Try to parse as JSON
+            try:
+                kwargs_dict = json.loads(kwargs)
+                print("DEBUG: Successfully parsed kwargs string as JSON")
+            except json.JSONDecodeError as e:
+                error_msg = f"Failed to parse kwargs as JSON: {str(e)}"
+                print(f"DEBUG ERROR: {error_msg}")
+                return json.dumps({"error": error_msg, "kwargs_received": kwargs}, indent=2)
         else:
-            kwargs_dict = json.loads(kwargs) if kwargs else {}
-    except (json.JSONDecodeError, TypeError) as e:
-        return json.dumps({"error": f"Invalid kwargs format: {str(e)}, received: {kwargs}"}, indent=2)
+            error_msg = f"Unexpected kwargs type: {type(kwargs)}"
+            print(f"DEBUG ERROR: {error_msg}")
+            return json.dumps({"error": error_msg, "kwargs_received": str(kwargs)}, indent=2)
     except Exception as e:
-        return json.dumps({"error": f"Error parsing kwargs: {str(e)}, received: {kwargs}"}, indent=2)
+        error_msg = f"Error handling kwargs: {str(e)}"
+        print(f"DEBUG ERROR: {error_msg}")
+        return json.dumps({"error": error_msg, "kwargs_received": str(kwargs)}, indent=2)
     
     # Build the changes dictionary directly from kwargs_dict
     changes = {}
@@ -124,9 +141,11 @@ async def update_adset(args: str = "", kwargs: str = None, access_token: str = N
     if not changes:
         return json.dumps({"error": "No update parameters provided"}, indent=2)
     
+    print(f"DEBUG: Final changes to apply: {changes}")
+    
     # Get current ad set details for comparison
-    current_details = await get_adset_details(args=adset_id, kwargs="", access_token=access_token)
-    current_details = json.loads(current_details)
+    current_details_json = await get_adset_details(adset_id=adset_id, access_token=access_token)
+    current_details = json.loads(current_details_json)
     
     # Start the callback server if not already running
     port = start_callback_server()
@@ -147,7 +166,7 @@ async def update_adset(args: str = "", kwargs: str = None, access_token: str = N
         "current_details": current_details,
         "proposed_changes": changes,
         "instructions_for_llm": "You must present this link as clickable Markdown to the user using the markdown_link format provided.",
-        "note": "A confirmation page will open in your browser. Please review and confirm the changes."
+        "note": "After authenticating, the token will be automatically saved and your ad set will be updated. Refresh the browser page if it doesn't load immediately."
     }
     
     return json.dumps(response, indent=2) 
