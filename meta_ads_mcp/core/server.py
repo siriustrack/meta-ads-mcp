@@ -26,9 +26,12 @@ def login_cli():
 
 def main():
     """Main entry point for the package"""
+    print("RUNNING LOCAL VERSION OF META ADS MCP")
+    
     parser = argparse.ArgumentParser(description="Meta Ads MCP Server")
     parser.add_argument("--login", action="store_true", help="Authenticate with Meta and store the token")
     parser.add_argument("--app-id", type=str, help="Meta App ID (Client ID) for authentication")
+    parser.add_argument("--version", action="store_true", help="Show the version of the package")
     
     args = parser.parse_args()
     
@@ -38,6 +41,12 @@ def main():
         auth_manager.app_id = args.app_id
     elif os.environ.get("META_APP_ID"):
         auth_manager.app_id = os.environ.get("META_APP_ID")
+    
+    # Show version if requested
+    if args.version:
+        from meta_ads_mcp import __version__
+        print(f"Meta Ads MCP v{__version__} - LOCAL VERSION")
+        return 0
     
     # Handle login command
     if args.login:
