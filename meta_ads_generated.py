@@ -757,6 +757,55 @@ async def get_adset_details(access_token: str = None, adset_id: str = None) -> s
     
     return json.dumps(data, indent=2)
 
+@mcp_server.tool()
+@meta_api_tool
+async def update_adset(
+    access_token: str = None,
+    adset_id: str = None,
+    bid_strategy: str = None,
+    bid_amount: int = None,
+    frequency_control_specs: List[Dict[str, Any]] = None,
+    status: str = None
+) -> str:
+    """
+    Update an existing ad set with new settings including frequency caps.
+    
+    Args:
+        access_token: Meta API access token (optional - will use cached token if not provided)
+        adset_id: Meta Ads ad set ID
+        bid_strategy: Bid strategy (e.g., 'LOWEST_COST_WITH_BID_CAP')
+        bid_amount: Bid amount in your account's currency (in cents for USD)
+        frequency_control_specs: List of frequency control specifications. Each spec should have:
+            - event: Type of event (e.g., 'IMPRESSIONS')
+            - interval_days: Number of days for the frequency cap
+            - max_frequency: Maximum number of times to show the ad
+        status: Update ad set status (ACTIVE, PAUSED, etc.)
+    """
+    if not adset_id:
+        return json.dumps({"error": "No ad set ID provided"}, indent=2)
+    
+    endpoint = f"{adset_id}"
+    params = {}
+    
+    if bid_strategy:
+        params["bid_strategy"] = bid_strategy
+    
+    if bid_amount is not None:
+        params["bid_amount"] = bid_amount
+    
+    if frequency_control_specs:
+        params["frequency_control_specs"] = frequency_control_specs
+    
+    if status:
+        params["status"] = status
+    
+    if not params:
+        return json.dumps({"error": "No update parameters provided"}, indent=2)
+    
+    data = await make_api_request(endpoint, access_token, params, method="POST")
+    
+    return json.dumps(data, indent=2)
+
 #
 # Ad Endpoints
 #
