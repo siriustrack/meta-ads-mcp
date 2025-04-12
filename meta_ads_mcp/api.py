@@ -1347,7 +1347,7 @@ async def debug_image_download(url="", ad_id="", access_token=None):
 
 @mcp_server.tool()
 @meta_api_tool
-async def authenticate(access_token: str = None) -> str:
+async def get_login_link(access_token: str = None) -> str:
     """
     Get a clickable login link for Meta Ads authentication.
     

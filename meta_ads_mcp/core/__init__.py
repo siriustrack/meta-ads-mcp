@@ -6,7 +6,7 @@ from .campaigns import get_campaigns, get_campaign_details, create_campaign
 from .adsets import get_adsets, get_adset_details, update_adset
 from .ads import get_ads, get_ad_details, get_ad_creatives, get_ad_image
 from .insights import get_insights, debug_image_download
-from .authentication import authenticate
+from .authentication import get_login_link
 from .server import login_cli, main
 from .auth import login
 
@@ -26,7 +26,7 @@ __all__ = [
     'get_ad_image',
     'get_insights',
     'debug_image_download',
-    'authenticate',
+    'get_login_link',
     'login_cli',
     'login',
     'main',

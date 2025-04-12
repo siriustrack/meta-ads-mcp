@@ -24,7 +24,7 @@ __all__ = [
     'get_ad_image',
     'get_insights',
     'debug_image_download',
-    'authenticate',
+    'get_login_link',
     'login_cli',
     'main'
 ]
@@ -45,7 +45,7 @@ from .core import (
     get_ad_image,
     get_insights,
     debug_image_download,
-    authenticate,
+    get_login_link,
     login_cli,
     main
 )
