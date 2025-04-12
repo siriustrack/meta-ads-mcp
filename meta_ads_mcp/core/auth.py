@@ -18,6 +18,12 @@ AUTH_SCOPE = "ads_management,ads_read,business_management"
 AUTH_REDIRECT_URI = "http://localhost:8888/callback"
 AUTH_RESPONSE_TYPE = "token"
 
+# Global token container for communication between threads
+token_container = {"token": None, "expires_in": None, "user_id": None}
+
+# Global container for update confirmations
+update_confirmation = {"approved": False}
+
 # Global flag for authentication state
 needs_authentication = False
 
@@ -26,9 +32,6 @@ callback_server_thread = None
 callback_server_lock = threading.Lock()
 callback_server_running = False
 callback_server_port = None
-
-# Global token container for communication between threads
-token_container = {"token": None, "expires_in": None, "user_id": None}
 
 class TokenInfo:
     """Stores token information including expiration"""
@@ -238,6 +241,137 @@ class CallbackHandler(BaseHTTPRequestHandler):
             </html>
             """
             self.wfile.write(html.encode())
+            return
+        
+        if self.path.startswith("/confirm-update"):
+            # Parse query parameters
+            query = parse_qs(urlparse(self.path).query)
+            adset_id = query.get("adset_id", [""])[0]
+            token = query.get("token", [""])[0]
+            changes = query.get("changes", ["{}"])[0]
+            
+            try:
+                changes_dict = json.loads(changes)
+            except json.JSONDecodeError:
+                changes_dict = {}
+            
+            # Return confirmation page
+            self.send_response(200)
+            self.send_header("Content-type", "text/html")
+            self.end_headers()
+            
+            html = """
+            <html>
+            <head>
+                <title>Confirm Ad Set Update</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 20px; }
+                    .warning { color: #d73a49; margin: 20px 0; }
+                    .changes { background: #f6f8fa; padding: 15px; border-radius: 6px; }
+                    .buttons { margin-top: 20px; }
+                    button { padding: 10px 20px; margin-right: 10px; border-radius: 6px; cursor: pointer; }
+                    .approve { background: #2ea44f; color: white; border: none; }
+                    .cancel { background: #d73a49; color: white; border: none; }
+                    .diff-table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+                    .diff-table td { padding: 8px; border: 1px solid #ddd; }
+                    .diff-table .header { background: #f1f8ff; font-weight: bold; }
+                </style>
+            </head>
+            <body>
+                <h1>Confirm Ad Set Update</h1>
+                <p>You are about to update Ad Set: <strong>""" + adset_id + """</strong></p>
+                
+                <div class="warning">
+                    <strong>⚠️ Warning:</strong> These changes will be applied immediately upon approval.
+                    """ + ("<br><strong>🔴 Important:</strong> This update includes status changes that may affect billing." if "status" in changes_dict else "") + """
+                </div>
+                
+                <h2>Proposed Changes:</h2>
+                <div class="changes">
+                    <table class="diff-table">
+                        <tr class="header">
+                            <td>Setting</td>
+                            <td>New Value</td>
+                        </tr>
+                        """ + "\n".join(f"""
+                        <tr>
+                            <td>{k}</td>
+                            <td>{v}</td>
+                        </tr>
+                        """ for k, v in changes_dict.items()) + """
+                    </table>
+                </div>
+                
+                <div class="buttons">
+                    <button class="approve" onclick="approveChanges()">Approve Changes</button>
+                    <button class="cancel" onclick="cancelChanges()">Cancel</button>
+                </div>
+
+                <script>
+                    function approveChanges() {
+                        fetch('/update-confirm?' + new URLSearchParams({
+                            adset_id: '""" + adset_id + """',
+                            token: '""" + token + """',
+                            changes: '""" + changes + """',
+                            action: 'approve'
+                        }))
+                        .then(response => response.json())
+                        .then(data => {
+                            alert('Changes approved and applied successfully!');
+                            window.close();
+                        })
+                        .catch(error => {
+                            alert('Error applying changes: ' + error);
+                        });
+                    }
+                    
+                    function cancelChanges() {
+                        fetch('/update-confirm?' + new URLSearchParams({
+                            adset_id: '""" + adset_id + """',
+                            action: 'cancel'
+                        }))
+                        .then(() => {
+                            alert('Update cancelled.');
+                            window.close();
+                        });
+                    }
+                </script>
+            </body>
+            </html>
+            """
+            self.wfile.write(html.encode())
+            return
+        
+        if self.path.startswith("/update-confirm"):
+            # Handle update confirmation response
+            query = parse_qs(urlparse(self.path).query)
+            action = query.get("action", [""])[0]
+            
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            
+            if action == "approve":
+                adset_id = query.get("adset_id", [""])[0]
+                token = query.get("token", [""])[0]
+                changes = query.get("changes", ["{}"])[0]
+                
+                # Store the approval in a global variable for the main thread to process
+                global update_confirmation
+                update_confirmation = {
+                    "approved": True,
+                    "adset_id": adset_id,
+                    "token": token,
+                    "changes": changes
+                }
+                
+                self.wfile.write(json.dumps({"status": "approved"}).encode())
+            else:
+                # Store the cancellation
+                update_confirmation = {
+                    "approved": False
+                }
+                self.wfile.write(json.dumps({"status": "cancelled"}).encode())
             return
         
         if self.path.startswith("/token"):

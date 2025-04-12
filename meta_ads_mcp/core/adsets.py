@@ -5,6 +5,8 @@ from typing import Optional, Dict, Any, List
 from .api import meta_api_tool, make_api_request
 from .accounts import get_ad_accounts
 from .server import mcp_server
+import asyncio
+from .auth import start_callback_server, update_confirmation
 
 
 @mcp_server.tool()
@@ -74,46 +76,78 @@ async def get_adset_details(access_token: str = None, adset_id: str = None) -> s
 
 @mcp_server.tool()
 @meta_api_tool
-async def update_adset(access_token: str = None, adset_id: str = None, 
-                       bid_strategy: Optional[str] = None, 
-                       bid_amount: Optional[int] = None,
-                       frequency_control_specs: Optional[List[Dict[str, Any]]] = None,
-                       status: Optional[str] = None) -> str:
+async def update_adset(args: str = "", kwargs: str = None, access_token: str = None) -> str:
     """
     Update an existing ad set with new settings including frequency caps.
     
     Args:
+        args: Meta Ads ad set ID
+        kwargs: JSON string containing update parameters:
+            - bid_strategy: Bid strategy (e.g., 'LOWEST_COST_WITH_BID_CAP')
+            - bid_amount: Bid amount in account currency (in cents for USD)
+            - frequency_control_specs: List of frequency control specifications
+            - status: Update ad set status (ACTIVE, PAUSED, etc.)
         access_token: Meta API access token (optional - will use cached token if not provided)
-        adset_id: Meta Ads ad set ID
-        bid_strategy: Bid strategy (e.g., 'LOWEST_COST_WITH_BID_CAP')
-        bid_amount: Bid amount in your account's currency (in cents for USD)
-        frequency_control_specs: List of frequency control specifications. Each spec should have:
-            - event: Type of event (e.g., 'IMPRESSIONS')
-            - interval_days: Number of days for the frequency cap
-            - max_frequency: Maximum number of times to show the ad
-        status: Update ad set status (ACTIVE, PAUSED, etc.)
     """
+    # Extract adset_id from args
+    adset_id = args
+    
     if not adset_id:
         return json.dumps({"error": "No ad set ID provided"}, indent=2)
     
-    endpoint = f"{adset_id}"
-    params = {}
+    # Try to read parameters from file if not provided
+    if not kwargs:
+        try:
+            with open('frequency_cap.json', 'r') as f:
+                kwargs = f.read().strip()
+        except (FileNotFoundError, IOError):
+            # If file doesn't exist, use default empty object
+            kwargs = "{}"
     
-    if bid_strategy:
-        params["bid_strategy"] = bid_strategy
+    # Extract optional parameters
+    try:
+        if isinstance(kwargs, (dict, list)):
+            kwargs_dict = kwargs
+        else:
+            kwargs_dict = json.loads(kwargs) if kwargs else {}
+    except (json.JSONDecodeError, TypeError) as e:
+        return json.dumps({"error": f"Invalid kwargs format: {str(e)}, received: {kwargs}"}, indent=2)
+    except Exception as e:
+        return json.dumps({"error": f"Error parsing kwargs: {str(e)}, received: {kwargs}"}, indent=2)
     
-    if bid_amount is not None:
-        params["bid_amount"] = bid_amount
+    # Build the changes dictionary directly from kwargs_dict
+    changes = {}
+    for key in ['bid_strategy', 'bid_amount', 'frequency_control_specs', 'status']:
+        if key in kwargs_dict and kwargs_dict[key] is not None:
+            changes[key] = kwargs_dict[key]
     
-    if frequency_control_specs:
-        params["frequency_control_specs"] = frequency_control_specs
-    
-    if status:
-        params["status"] = status
-    
-    if not params:
+    if not changes:
         return json.dumps({"error": "No update parameters provided"}, indent=2)
     
-    data = await make_api_request(endpoint, access_token, params, method="POST")
+    # Get current ad set details for comparison
+    current_details = await get_adset_details(args=adset_id, kwargs="", access_token=access_token)
+    current_details = json.loads(current_details)
     
-    return json.dumps(data, indent=2) 
+    # Start the callback server if not already running
+    port = start_callback_server()
+    
+    # Generate confirmation URL with properly encoded parameters
+    changes_json = json.dumps(changes)
+    confirmation_url = f"http://localhost:{port}/confirm-update?adset_id={adset_id}&token={access_token}&changes={changes_json}"
+    
+    # Reset the update confirmation
+    update_confirmation.clear()
+    update_confirmation.update({"approved": False})
+    
+    # Return the confirmation link
+    response = {
+        "message": "Please confirm the ad set update",
+        "confirmation_url": confirmation_url,
+        "markdown_link": f"[Click here to confirm ad set update]({confirmation_url})",
+        "current_details": current_details,
+        "proposed_changes": changes,
+        "instructions_for_llm": "You must present this link as clickable Markdown to the user using the markdown_link format provided.",
+        "note": "A confirmation page will open in your browser. Please review and confirm the changes."
+    }
+    
+    return json.dumps(response, indent=2) 
