@@ -4,8 +4,10 @@ import json
 from typing import List, Optional
 from .api import meta_api_tool, make_api_request
 from .accounts import get_ad_accounts
+from .server import mcp_server
 
 
+@mcp_server.tool()
 @meta_api_tool
 async def get_campaigns(access_token: str = None, account_id: str = None, limit: int = 10, status_filter: str = "") -> str:
     """
@@ -41,6 +43,7 @@ async def get_campaigns(access_token: str = None, account_id: str = None, limit:
     return json.dumps(data, indent=2)
 
 
+@mcp_server.tool()
 @meta_api_tool
 async def get_campaign_details(access_token: str = None, campaign_id: str = None) -> str:
     """
@@ -63,6 +66,7 @@ async def get_campaign_details(access_token: str = None, campaign_id: str = None
     return json.dumps(data, indent=2)
 
 
+@mcp_server.tool()
 @meta_api_tool
 async def create_campaign(
     access_token: str = None,

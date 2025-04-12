@@ -4,10 +4,12 @@ import json
 from typing import Optional
 from .api import meta_api_tool, make_api_request
 from .utils import download_image, try_multiple_download_methods, ad_creative_images, create_resource_from_image
+from .server import mcp_server
 import base64
 import datetime
 
 
+@mcp_server.tool()
 @meta_api_tool
 async def get_insights(access_token: str = None, object_id: str = None, 
                       time_range: str = "maximum", breakdown: str = "", 
@@ -40,6 +42,7 @@ async def get_insights(access_token: str = None, object_id: str = None,
     return json.dumps(data, indent=2)
 
 
+@mcp_server.tool()
 @meta_api_tool
 async def debug_image_download(access_token: str = None, url: str = "", ad_id: str = "") -> str:
     """
@@ -230,6 +233,7 @@ async def debug_image_download(access_token: str = None, url: str = "", ad_id: s
     return json.dumps(results, indent=2)
 
 
+@mcp_server.tool()
 @meta_api_tool
 async def save_ad_image_via_api(access_token: str = None, ad_id: str = None) -> str:
     """

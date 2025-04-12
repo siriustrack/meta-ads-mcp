@@ -9,8 +9,10 @@ from mcp.server.fastmcp import Image
 from .api import meta_api_tool, make_api_request
 from .accounts import get_ad_accounts
 from .utils import download_image, try_multiple_download_methods, ad_creative_images
+from .server import mcp_server
 
 
+@mcp_server.tool()
 @meta_api_tool
 async def get_ads(access_token: str = None, account_id: str = None, limit: int = 10, 
                  campaign_id: str = "", adset_id: str = "") -> str:
@@ -51,6 +53,7 @@ async def get_ads(access_token: str = None, account_id: str = None, limit: int =
     return json.dumps(data, indent=2)
 
 
+@mcp_server.tool()
 @meta_api_tool
 async def get_ad_details(access_token: str = None, ad_id: str = None) -> str:
     """
@@ -73,6 +76,7 @@ async def get_ad_details(access_token: str = None, ad_id: str = None) -> str:
     return json.dumps(data, indent=2)
 
 
+@mcp_server.tool()
 @meta_api_tool
 async def get_ad_creatives(access_token: str = None, ad_id: str = None) -> str:
     """
@@ -226,6 +230,7 @@ async def get_ad_creatives(access_token: str = None, ad_id: str = None) -> str:
     return json.dumps(creative_data, indent=2)
 
 
+@mcp_server.tool()
 @meta_api_tool
 async def get_ad_image(access_token: str = None, ad_id: str = None) -> Image:
     """

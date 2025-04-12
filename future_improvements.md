@@ -1,18 +1,5 @@
 # Future Improvements for Meta Ads MCP
 
-## Critical Improvement: Add MCP Server Tool Decorators
-
-We recently refactored the codebase to modularize the functionality that was in meta_ads_generated.py, but we need to add the `@mcp_server.tool()` decorator to all relevant functions to ensure they're properly registered with the MCP server. We've already fixed this for the `get_ad_accounts` function, but this needs to be done for all other functions we want to expose as MCP tools.
-
-Pattern for tool function registration:
-```python
-@mcp_server.tool()  # Required to register with MCP server
-@meta_api_tool      # Handles authentication logic
-async def function_name(...):
-    """Documentation..."""
-    # Function code
-```
-
 ## Planned Improvement: Ad Set Update Confirmation Flow
 
 ### Overview

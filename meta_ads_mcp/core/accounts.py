@@ -28,6 +28,7 @@ async def get_ad_accounts(access_token: str = None, user_id: str = "me", limit: 
     return json.dumps(data, indent=2)
 
 
+@mcp_server.tool()
 @meta_api_tool
 async def get_account_info(access_token: str = None, account_id: str = None) -> str:
     """

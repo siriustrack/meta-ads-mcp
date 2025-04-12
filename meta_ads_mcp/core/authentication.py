@@ -3,9 +3,11 @@
 import json
 import asyncio
 from .api import meta_api_tool
-from .auth import start_callback_server, auth_manager
+from .auth import start_callback_server, auth_manager, get_current_access_token
+from .server import mcp_server
 
 
+@mcp_server.tool()
 @meta_api_tool
 async def get_login_link(access_token: str = None) -> str:
     """
@@ -17,40 +19,22 @@ async def get_login_link(access_token: str = None) -> str:
     Returns:
         A clickable resource link for Meta authentication
     """
-    # Check if we have a cached token
-    cached_token = auth_manager.get_access_token()
-    token_status = "No token" if not cached_token else "Valid token"
+    # The meta_api_tool decorator will handle all the authentication logic
+    # We just need to return a simple success message if we already have a token
     
-    # If we already have a valid token and none was provided, just return success
-    if cached_token and not access_token:
+    if access_token or await get_current_access_token():
+        cached_token = auth_manager.get_access_token()
         return json.dumps({
             "message": "Already authenticated",
-            "token_status": token_status,
-            "token_preview": cached_token[:10] + "...",
-            "created_at": auth_manager.token_info.created_at,
-            "expires_in": auth_manager.token_info.expires_in
+            "token_status": "Valid token",
+            "token_preview": cached_token[:10] + "..." if cached_token else "None",
+            "created_at": auth_manager.token_info.created_at if hasattr(auth_manager, "token_info") else None,
+            "expires_in": auth_manager.token_info.expires_in if hasattr(auth_manager, "token_info") else None
         }, indent=2)
     
-    # IMPORTANT: Start the callback server first by calling our helper function
-    # This ensures the server is ready before we provide the URL to the user
-    port = start_callback_server()
-    
-    # Generate direct login URL
-    auth_manager.redirect_uri = f"http://localhost:{port}/callback"  # Ensure port is set correctly
-    login_url = auth_manager.get_auth_url()
-    
-    # Return a special format that helps the LLM format the response properly
-    response = {
-        "login_url": login_url,
-        "token_status": token_status,
-        "server_status": f"Callback server running on port {port}",
-        "markdown_link": f"[Click here to authenticate with Meta Ads]({login_url})",
-        "message": "IMPORTANT: Please use the Markdown link format in your response to allow the user to click it.",
-        "instructions_for_llm": "You must present this link as clickable Markdown to the user using the markdown_link format provided.",
-        "note": "After authenticating, the token will be automatically saved."
-    }
-    
-    # Wait a moment to ensure the server is fully started
-    await asyncio.sleep(1)
-    
-    return json.dumps(response, indent=2) 
+    # If no token exists, the meta_api_tool decorator will handle authentication
+    # This return statement is essentially a fallback that won't normally be reached
+    return json.dumps({
+        "message": "Authentication required",
+        "note": "The auth flow should have been handled by the decorator"
+    }, indent=2) 

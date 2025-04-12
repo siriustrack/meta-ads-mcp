@@ -4,8 +4,10 @@ import json
 from typing import Optional, Dict, Any, List
 from .api import meta_api_tool, make_api_request
 from .accounts import get_ad_accounts
+from .server import mcp_server
 
 
+@mcp_server.tool()
 @meta_api_tool
 async def get_adsets(access_token: str = None, account_id: str = None, limit: int = 10, campaign_id: str = "") -> str:
     """
@@ -41,6 +43,7 @@ async def get_adsets(access_token: str = None, account_id: str = None, limit: in
     return json.dumps(data, indent=2)
 
 
+@mcp_server.tool()
 @meta_api_tool
 async def get_adset_details(access_token: str = None, adset_id: str = None) -> str:
     """
@@ -69,6 +72,7 @@ async def get_adset_details(access_token: str = None, adset_id: str = None) -> s
     return json.dumps(data, indent=2)
 
 
+@mcp_server.tool()
 @meta_api_tool
 async def update_adset(access_token: str = None, adset_id: str = None, 
                        bid_strategy: Optional[str] = None, 
