@@ -1190,37 +1190,26 @@ async def get_insights(
 
 @mcp_server.tool()
 @meta_api_tool
-async def debug_image_download(access_token: str = None, url: str = "", ad_id: str = "") -> str:
-    """
-    Debug image download issues and report detailed diagnostics.
+async def debug_image_download(url="", ad_id="", access_token=None):
+    """Debug image download issues and report detailed diagnostics."""
+    results = {}
     
-    Args:
-        access_token: Meta API access token (optional - will use cached token if not provided)
-        url: Direct image URL to test (optional)
-        ad_id: Meta Ads ad ID (optional, used if url is not provided)
-    """
-    results = {
-        "diagnostics": {
-            "timestamp": str(datetime.datetime.now()),
-            "methods_tried": [],
-            "request_details": [],
-            "network_info": {}
-        }
-    }
-    
-    # If no URL provided but ad_id is, get URL from ad creative
-    if not url and ad_id:
-        print(f"Getting image URL from ad creative for ad {ad_id}")
-        # Get the creative details
-        creative_json = await get_ad_creatives(access_token=access_token, ad_id=ad_id)
-        creative_data = json.loads(creative_json)
-        results["creative_data"] = creative_data
-        
-        # Look for image URL in the creative
-        if "full_image_url" in creative_data:
-            url = creative_data.get("full_image_url")
-        elif "thumbnail_url" in creative_data:
-            url = creative_data.get("thumbnail_url")
+    if url:
+        results["image_url"] = url
+    else:
+        # If no URL provided but ad_id is, get URL from ad creative
+        if ad_id:
+            print(f"Getting image URL from ad creative for ad {ad_id}")
+            # Get the creative details
+            creative_json = await get_ad_creatives(access_token=access_token, ad_id=ad_id)
+            creative_data = json.loads(creative_json)
+            results["creative_data"] = creative_data
+            
+            # Look for image URL in the creative
+            if "full_image_url" in creative_data:
+                url = creative_data.get("full_image_url")
+            elif "thumbnail_url" in creative_data:
+                url = creative_data.get("thumbnail_url")
     
     if not url:
         return json.dumps({
@@ -1229,29 +1218,13 @@ async def debug_image_download(access_token: str = None, url: str = "", ad_id: s
         }, indent=2)
     
     results["image_url"] = url
-    print(f"Debug: Testing image URL: {url}")
-    
-    # Try to get network information to help debug
-    try:
-        import socket
-        hostname = urlparse(url).netloc
-        ip_address = socket.gethostbyname(hostname)
-        results["diagnostics"]["network_info"] = {
-            "hostname": hostname,
-            "ip_address": ip_address,
-            "is_facebook_cdn": "fbcdn" in hostname
-        }
-    except Exception as e:
-        results["diagnostics"]["network_info"] = {
-            "error": str(e)
-        }
     
     # Method 1: Basic download
     method_result = {
         "method": "Basic download with standard headers",
         "success": False
     }
-    results["diagnostics"]["methods_tried"].append(method_result)
+    results["diagnostics"] = {"methods_tried": [method_result]}
     
     try:
         headers = {

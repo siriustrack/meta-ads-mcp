@@ -101,126 +101,25 @@ async def make_api_request(
 
 # Generic wrapper for all Meta API tools
 def meta_api_tool(func):
-    """Decorator to handle authentication for all Meta API tools"""
+    """Decorator for Meta API tools that handles authentication and error handling."""
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
-        # Handle various MCP invocation patterns
-        if len(args) == 1 and isinstance(args[0], str):
-            # If it's a string and looks like JSON, try to parse it
-            try:
-                parsed = json.loads(args[0]) if args[0] else {}
-                if isinstance(parsed, dict):
-                    # If it has an 'args' key, use that for positional args
-                    if 'args' in parsed:
-                        args = (parsed['args'],)
-                    # If it has a 'kwargs' key, update kwargs
-                    if 'kwargs' in parsed:
-                        if isinstance(parsed['kwargs'], str):
-                            try:
-                                kwargs.update(json.loads(parsed['kwargs']))
-                            except:
-                                pass
-                        elif isinstance(parsed['kwargs'], dict):
-                            kwargs.update(parsed['kwargs'])
-                else:
-                    # If it's not a dict, treat it as a single positional arg
-                    args = (args[0],)
-            except:
-                # If parsing fails, treat it as a single positional arg
-                args = (args[0],)
-        
-        # Debug print the effective args and kwargs
-        print(f"DEBUG: meta_api_tool wrapper called for {func.__name__}")
-        print(f"DEBUG: args: {args}")
-        print(f"DEBUG: kwargs: {kwargs}")
-        
-        # Check if access_token is provided in kwargs
-        access_token = kwargs.get('access_token')
-        
-        # If not, try to get it from the auth manager
-        if not access_token:
-            try:
-                print("DEBUG: No access_token in kwargs, trying to get from auth_manager")
-                access_token = await get_current_access_token()
-                if access_token:
-                    print(f"DEBUG: Got token from auth_manager (first 10 chars): {access_token[:10]}")
-                else:
-                    print("DEBUG: No token available from auth_manager")
-                    # Set the global flag to indicate authentication is needed
-                    global needs_authentication
-                    needs_authentication = True
-            except Exception as e:
-                print(f"DEBUG: Error getting token: {e}")
-                needs_authentication = True
-        
-        # If still no token, we need authentication
-        if not access_token or needs_authentication:
-            print("DEBUG: Initiating authentication flow")
-            # Start the callback server
-            port = start_callback_server()
-            
-            # Update auth manager's redirect URI with the current port
-            auth_manager.redirect_uri = f"http://localhost:{port}/callback"
-            
-            # Generate the authentication URL
-            login_url = auth_manager.get_auth_url()
-            
-            # Create a resource response that includes the markdown link format
-            response = {
-                "error": "Authentication required to use Meta Ads API",
-                "login_url": login_url,
-                "server_status": f"Callback server running on port {port}",
-                "markdown_link": f"[Click here to authenticate with Meta Ads API]({login_url})",
-                "message": "IMPORTANT: Please use the Markdown link format in your response to allow the user to click it.",
-                "instructions_for_llm": "You must present this link as clickable Markdown to the user using the markdown_link format provided.",
-                "note": "After authenticating, the token will be automatically saved."
-            }
-            
-            # Wait a moment to ensure the server is fully started
-            await asyncio.sleep(1)
-            
-            return json.dumps(response, indent=2)
-        
-        # Update kwargs with the token (this section won't be reached right now)
-        kwargs['access_token'] = access_token
-        
-        # Call the original function
         try:
-            result = await func(*args, **kwargs)
-            
-            # If authentication is needed after the call (e.g., token was invalidated)
-            if needs_authentication:
-                # Start the callback server
-                port = start_callback_server()
+            # If access_token is not in kwargs, try to get it from auth_manager
+            if 'access_token' not in kwargs or not kwargs['access_token']:
+                try:
+                    access_token = await auth_manager.get_current_access_token()
+                    if access_token:
+                        kwargs['access_token'] = access_token
+                except Exception as e:
+                    pass
+
+            if 'access_token' not in kwargs or not kwargs['access_token']:
+                needs_authentication = True
                 
-                # Update auth manager's redirect URI with the current port
-                auth_manager.redirect_uri = f"http://localhost:{port}/callback"
-                
-                # Generate the authentication URL
-                login_url = auth_manager.get_auth_url()
-                
-                # Create a resource response that includes the markdown link format
-                response = {
-                    "error": "Session expired or token invalid. Please re-authenticate with Meta Ads API",
-                    "login_url": login_url,
-                    "server_status": f"Callback server running on port {port}",
-                    "markdown_link": f"[Click here to re-authenticate with Meta Ads API]({login_url})",
-                    "message": "IMPORTANT: Please use the Markdown link format in your response to allow the user to click it.",
-                    "instructions_for_llm": "You must present this link as clickable Markdown to the user using the markdown_link format provided.",
-                    "note": "After authenticating, the token will be automatically saved."
-                }
-                
-                # Wait a moment to ensure the server is fully started
-                await asyncio.sleep(1)
-                
-                return json.dumps(response, indent=2)
-            
-            return result
+            # Call the original function
+            return await func(*args, **kwargs)
         except Exception as e:
-            # Handle any unexpected errors
-            error_result = {
-                "error": f"Error calling Meta API: {str(e)}"
-            }
-            return json.dumps(error_result, indent=2)
+            return {"error": str(e)}
     
     return wrapper 

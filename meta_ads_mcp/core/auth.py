@@ -587,11 +587,6 @@ class CallbackHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"Token received")
             
-            # Debug prints
-            print("DEBUG: Token received from Facebook")
-            print(f"DEBUG: Token value (first 10 chars): {token_container['token'][:10] if token_container['token'] else 'None'}")
-            print(f"DEBUG: Expires in: {token_container['expires_in']}")
-            
             # Process the token (save it) immediately
             if token_container["token"]:
                 # Create token info and save to cache
@@ -600,30 +595,19 @@ class CallbackHandler(BaseHTTPRequestHandler):
                     expires_in=token_container["expires_in"]
                 )
                 
-                print(f"DEBUG: Created TokenInfo object with access_token (first 10 chars): {token_info.access_token[:10] if token_info.access_token else 'None'}")
-                print(f"DEBUG: TokenInfo expires_in: {token_info.expires_in}")
-                
-                # Set token in auth_manager
-                if 'auth_manager' in globals():
-                    auth_manager.token_info = token_info
-                    print("DEBUG: Set token_info in auth_manager")
-                else:
-                    print("DEBUG: ERROR - auth_manager not in globals!")
-                
                 try:
                     # Save to cache
-                    auth_manager._save_token_to_cache()
-                    print(f"DEBUG: Saved token to cache at {auth_manager._get_token_cache_path()}")
+                    self._save_token_to_cache()
                 except Exception as e:
-                    print(f"DEBUG: ERROR saving token to cache: {str(e)}")
+                    pass
                 
                 # Reset auth needed flag
                 needs_authentication = False
                 
-                print(f"DEBUG: Token processed, needs_authentication = {needs_authentication}")
+                return token_container["token"]
             else:
-                print("DEBUG: ERROR - Received empty token from Facebook")
-            return
+                needs_authentication = True
+                return None
     
     # Silence server logs
     def log_message(self, format, *args):
@@ -712,37 +696,49 @@ def start_callback_server():
             raise e
 
 
-async def get_current_access_token() -> Optional[str]:
-    """
-    Get the current access token from cache
+def process_token_response(token_container):
+    """Process the token response from Facebook."""
+    global needs_authentication
     
-    Returns:
-        Current access token or None if not available
-    """
-    print("DEBUG: get_current_access_token called")
-    
-    if auth_manager:
+    if token_container and token_container.get('token'):
+        token_info = TokenInfo(
+            access_token=token_container['token'],
+            expires_in=token_container.get('expires_in', 0)
+        )
+        
+        try:
+            auth_manager.token_info = token_info
+        except NameError:
+            pass
+            
+        try:
+            auth_manager._save_token_to_cache()
+        except Exception as e:
+            pass
+            
+        needs_authentication = False
+        return True
+    else:
+        needs_authentication = True
+        return False
+
+
+async def get_current_access_token():
+    """Get the current access token, either from auth_manager or token_container."""
+    try:
         token = auth_manager.get_access_token()
         if token:
-            print(f"DEBUG: Returned token from auth_manager (first 10 chars): {token[:10]}")
-        else:
-            print("DEBUG: No token available from auth_manager")
-            
-        # Check if token is in token_container but not in auth_manager
-        if token_container and token_container.get("token") and not token:
-            print("DEBUG: Found token in token_container but not in auth_manager, updating...")
-            token_info = TokenInfo(
-                access_token=token_container["token"],
-                expires_in=token_container.get("expires_in")
+            return token
+    except Exception:
+        if token_container.get('token'):
+            auth_manager.token_info = TokenInfo(
+                access_token=token_container['token'],
+                expires_in=token_container.get('expires_in', 0)
             )
-            auth_manager.token_info = token_info
-            auth_manager._save_token_to_cache()
-            return token_container["token"]
-            
-        return token
-    else:
-        print("DEBUG: auth_manager is not initialized")
-        return None
+            return token_container['token']
+        pass
+    
+    return None
 
 
 def login():

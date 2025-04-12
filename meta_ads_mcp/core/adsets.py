@@ -93,25 +93,22 @@ async def update_adset(adset_id: str, frequency_control_specs: List[Dict[str, An
     if not adset_id:
         return json.dumps({"error": "No ad set ID provided"}, indent=2)
     
-    # Debug print
-    print(f"DEBUG: update_adset called with adset_id: {adset_id}")
-    print(f"DEBUG: frequency_control_specs: {frequency_control_specs}")
-    
-    # Build the changes dictionary directly from parameters
     changes = {}
-    if bid_strategy is not None:
-        changes['bid_strategy'] = bid_strategy
-    if bid_amount is not None:
-        changes['bid_amount'] = bid_amount
+    
     if frequency_control_specs is not None:
         changes['frequency_control_specs'] = frequency_control_specs
+    
+    if bid_strategy is not None:
+        changes['bid_strategy'] = bid_strategy
+        
+    if bid_amount is not None:
+        changes['bid_amount'] = bid_amount
+        
     if status is not None:
         changes['status'] = status
     
     if not changes:
         return json.dumps({"error": "No update parameters provided"}, indent=2)
-    
-    print(f"DEBUG: Final changes to apply: {changes}")
     
     # Get current ad set details for comparison
     current_details_json = await get_adset_details(adset_id=adset_id, access_token=access_token)

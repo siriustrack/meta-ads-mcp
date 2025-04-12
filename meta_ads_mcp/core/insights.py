@@ -84,7 +84,6 @@ async def debug_image_download(access_token: str = None, url: str = "", ad_id: s
         }, indent=2)
     
     results["image_url"] = url
-    print(f"Debug: Testing image URL: {url}")
     
     # Try to get network information to help debug
     try:
