@@ -145,13 +145,13 @@ The following functions should be updated to follow this standardized pattern:
 7. ✅ `get_ad_details`
    - Main arg: ad_id
 
-8. `get_ad_creatives`
+8. ✅ `get_ad_creatives`
    - Main arg: ad_id
 
-9. `get_ad_image`
+9. ✅ `get_ad_image`
    - Main arg: ad_id
 
-10. `get_insights`
+10. ✅ `get_insights`
     - Main arg: object_id
     - Kwargs: time_range, breakdown, level
 

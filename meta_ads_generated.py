@@ -1089,7 +1089,7 @@ async def get_ad_creatives(args: str = "", kwargs: str = "", access_token: str =
 
 @mcp_server.tool()
 @meta_api_tool
-async def get_ad_image(access_token: str = None, ad_id: str = None) -> Image:
+async def get_ad_image(args: str = "", kwargs: str = "", access_token: str = None) -> Image:
     """
     Get, download, and visualize a Meta ad image in one step. Useful to see the image in the LLM.
     
@@ -1100,6 +1100,9 @@ async def get_ad_image(access_token: str = None, ad_id: str = None) -> Image:
     Returns:
         The ad image ready for direct visual analysis
     """
+    # Extract ad_id from args
+    ad_id = args
+    
     if not ad_id:
         return "Error: No ad ID provided"
         
@@ -1154,7 +1157,7 @@ async def get_ad_image(access_token: str = None, ad_id: str = None) -> Image:
     if not image_hashes:
         # If no hashes found, try to extract from the first creative we found in the API
         # Get creative for ad to try to extract hash
-        creative_json = await get_ad_creatives(access_token, ad_id)
+        creative_json = await get_ad_creatives(ad_id, "", access_token)
         creative_data = json.loads(creative_json)
         
         # Try to extract hash from asset_feed_spec
@@ -1257,13 +1260,7 @@ async def get_resource(resource_id: str) -> Dict[str, Any]:
 
 @mcp_server.tool()
 @meta_api_tool
-async def get_insights(
-    access_token: str = None,
-    object_id: str = None,
-    time_range: str = "maximum",
-    breakdown: str = "",
-    level: str = "ad"
-) -> str:
+async def get_insights(args: str = "", kwargs: str = "", access_token: str = None) -> str:
     """
     Get performance insights for a campaign, ad set, ad or account.
     
@@ -1274,8 +1271,22 @@ async def get_insights(
         breakdown: Optional breakdown dimension (e.g., age, gender, country)
         level: Level of aggregation (ad, adset, campaign, account)
     """
+    # Extract object_id from args
+    object_id = args
+    
     if not object_id:
         return json.dumps({"error": "No object ID provided"}, indent=2)
+    
+    # Extract optional parameters
+    try:
+        kwargs_dict = json.loads(kwargs) if kwargs else {}
+        time_range = kwargs_dict.get('time_range', "maximum")
+        breakdown = kwargs_dict.get('breakdown', "")
+        level = kwargs_dict.get('level', "ad")
+    except:
+        time_range = "maximum"
+        breakdown = ""
+        level = "ad"
         
     endpoint = f"{object_id}/insights"
     params = {
