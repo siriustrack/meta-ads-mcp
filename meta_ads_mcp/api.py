@@ -1347,53 +1347,172 @@ async def debug_image_download(url="", ad_id="", access_token=None):
 
 @mcp_server.tool()
 @meta_api_tool
-async def get_login_link(access_token: str = None) -> str:
+async def save_ad_image_via_api(access_token: str = None, ad_id: str = None) -> str:
     """
-    Get a clickable login link for Meta Ads authentication.
+    Try to save an ad image by using the Marketing API's attachment endpoints.
+    This is an alternative approach when direct image download fails.
     
     Args:
         access_token: Meta API access token (optional - will use cached token if not provided)
-    
-    Returns:
-        A clickable resource link for Meta authentication
+        ad_id: Meta Ads ad ID
     """
-    # Check if we have a cached token
-    cached_token = auth_manager.get_access_token()
-    token_status = "No token" if not cached_token else "Valid token"
+    if not ad_id:
+        return json.dumps({"error": "No ad ID provided"}, indent=2)
+        
+    print(f"Attempting to save image for ad {ad_id} using API methods")
     
-    # If we already have a valid token and none was provided, just return success
-    if cached_token and not access_token:
-        return json.dumps({
-            "message": "Already authenticated",
-            "token_status": token_status,
-            "token_preview": cached_token[:10] + "...",
-            "created_at": auth_manager.token_info.created_at,
-            "expires_in": auth_manager.token_info.expires_in
-        }, indent=2)
-    
-    # IMPORTANT: Start the callback server first by calling our helper function
-    # This ensures the server is ready before we provide the URL to the user
-    port = start_callback_server()
-    
-    # Generate direct login URL
-    auth_manager.redirect_uri = f"http://localhost:{port}/callback"  # Ensure port is set correctly
-    login_url = auth_manager.get_auth_url()
-    
-    # Return a special format that helps the LLM format the response properly
-    response = {
-        "login_url": login_url,
-        "token_status": token_status,
-        "server_status": f"Callback server running on port {port}",
-        "markdown_link": f"[Click here to authenticate with Meta Ads]({login_url})",
-        "message": "IMPORTANT: Please use the Markdown link format in your response to allow the user to click it.",
-        "instructions_for_llm": "You must present this link as clickable Markdown to the user using the markdown_link format provided.",
-        "note": "After authenticating, the token will be automatically saved."
+    # First, get creative ID and account ID
+    ad_endpoint = f"{ad_id}"
+    ad_params = {
+        "fields": "creative{id},account_id"
     }
     
-    # Wait a moment to ensure the server is fully started
-    await asyncio.sleep(1)
+    ad_data = await make_api_request(ad_endpoint, access_token, ad_params)
     
-    return json.dumps(response, indent=2)
+    if "error" in ad_data:
+        return json.dumps({"error": f"Could not get ad data - {ad_data['error']}"}, indent=2)
+    
+    # Extract account_id
+    account_id = ad_data.get("account_id", "")
+    if not account_id:
+        return json.dumps({"error": "No account ID found"}, indent=2)
+    
+    # Extract creative ID
+    if "creative" not in ad_data:
+        return json.dumps({"error": "No creative found for this ad"}, indent=2)
+        
+    creative_data = ad_data.get("creative", {})
+    creative_id = creative_data.get("id")
+    if not creative_id:
+        return json.dumps({"error": "No creative ID found"}, indent=2)
+    
+    # Get creative details to find image hash
+    creative_endpoint = f"{creative_id}"
+    creative_params = {
+        "fields": "id,name,image_hash,thumbnail_url,image_url,object_story_spec"
+    }
+    
+    creative_details = await make_api_request(creative_endpoint, access_token, creative_params)
+    
+    if "error" in creative_details:
+        return json.dumps({"error": f"Could not get creative details - {creative_details['error']}"}, indent=2)
+    
+    results = {
+        "ad_id": ad_id,
+        "creative_id": creative_id,
+        "account_id": account_id,
+        "creative_details": creative_details
+    }
+    
+    # Try to find image hash
+    image_hash = None
+    
+    # Direct hash on creative
+    if "image_hash" in creative_details:
+        image_hash = creative_details["image_hash"]
+        
+    # Look in object_story_spec
+    elif "object_story_spec" in creative_details:
+        spec = creative_details["object_story_spec"]
+        
+        # For link ads
+        if "link_data" in spec:
+            link_data = spec["link_data"]
+            if "image_hash" in link_data:
+                image_hash = link_data["image_hash"]
+        
+        # For photo ads
+        elif "photo_data" in spec:
+            photo_data = spec["photo_data"]
+            if "image_hash" in photo_data:
+                image_hash = photo_data["image_hash"]
+    
+    if not image_hash:
+        return json.dumps({
+            "error": "No image hash found in creative",
+            "creative_details": creative_details
+        }, indent=2)
+    
+    # Now get image data from the adimages endpoint
+    image_endpoint = f"act_{account_id}/adimages"
+    image_params = {
+        "hashes": [image_hash]
+    }
+    
+    image_data = await make_api_request(image_endpoint, access_token, image_params)
+    
+    if "error" in image_data:
+        return json.dumps({
+            "error": f"Failed to get image data - {image_data['error']}",
+            "hash": image_hash
+        }, indent=2)
+    
+    if "data" not in image_data or not image_data["data"]:
+        return json.dumps({
+            "error": "No image data returned from API",
+            "hash": image_hash
+        }, indent=2)
+    
+    # Get the URL from the first image
+    first_image = image_data["data"][0]
+    image_url = first_image.get("url")
+    
+    if not image_url:
+        return json.dumps({
+            "error": "No image URL found in API response",
+            "api_response": image_data
+        }, indent=2)
+    
+    # Try to save the image by directly downloading it
+    results["image_url"] = image_url
+    
+    try:
+        # Try multiple download methods
+        image_bytes = await try_multiple_download_methods(image_url)
+        
+        if not image_bytes:
+            return json.dumps({
+                "error": "Failed to download image from URL provided by API",
+                "image_url": image_url,
+                "suggestion": "Try using the debug_image_download tool for more details"
+            }, indent=2)
+        
+        # Create a resource ID for this image
+        resource_id = f"ad_{ad_id}_{int(time.time())}"
+        
+        # Store the image
+        img = PILImage.open(io.BytesIO(image_bytes))
+        mime_type = f"image/{img.format.lower()}" if img.format else "image/jpeg"
+        
+        # Save to our global dictionary
+        ad_creative_images[resource_id] = {
+            "data": image_bytes,
+            "mime_type": mime_type,
+            "name": f"Ad {ad_id} Image",
+            "width": img.width,
+            "height": img.height,
+            "format": img.format
+        }
+        
+        # Return the success result with resource info
+        return json.dumps({
+            "success": True,
+            "message": "Successfully saved image",
+            "resource_id": resource_id,
+            "resource_uri": f"meta-ads://images/{resource_id}",
+            "image_details": {
+                "width": img.width,
+                "height": img.height,
+                "format": img.format,
+                "size_bytes": len(image_bytes)
+            }
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({
+            "error": f"Error saving image: {str(e)}",
+            "image_url": image_url
+        }, indent=2)
 
 # Helper function to start the login flow
 def login():
