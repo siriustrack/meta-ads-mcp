@@ -76,67 +76,37 @@ async def get_adset_details(access_token: str = None, adset_id: str = None) -> s
 
 @mcp_server.tool()
 @meta_api_tool
-async def update_adset(args: str = "", kwargs: str = None, access_token: str = None) -> str:
+async def update_adset(adset_id: str, frequency_control_specs: List[Dict[str, Any]] = None, bid_strategy: str = None, 
+                        bid_amount: int = None, status: str = None, access_token: str = None) -> str:
     """
-    Update an existing ad set with new settings including frequency caps.
+    Update an ad set with new settings including frequency caps.
     
     Args:
-        args: Meta Ads ad set ID
-        kwargs: JSON string containing update parameters:
-            - bid_strategy: Bid strategy (e.g., 'LOWEST_COST_WITH_BID_CAP')
-            - bid_amount: Bid amount in account currency (in cents for USD)
-            - frequency_control_specs: List of frequency control specifications
-            - status: Update ad set status (ACTIVE, PAUSED, etc.)
+        adset_id: Meta Ads ad set ID
+        frequency_control_specs: List of frequency control specifications 
+                                 (e.g. [{"event": "IMPRESSIONS", "interval_days": 7, "max_frequency": 3}])
+        bid_strategy: Bid strategy (e.g., 'LOWEST_COST_WITH_BID_CAP')
+        bid_amount: Bid amount in account currency (in cents for USD)
+        status: Update ad set status (ACTIVE, PAUSED, etc.)
         access_token: Meta API access token (optional - will use cached token if not provided)
     """
-    # Extract adset_id from args
-    adset_id = args
-    
     if not adset_id:
         return json.dumps({"error": "No ad set ID provided"}, indent=2)
     
     # Debug print
     print(f"DEBUG: update_adset called with adset_id: {adset_id}")
-    print(f"DEBUG: kwargs type: {type(kwargs)}, value: {kwargs}")
+    print(f"DEBUG: frequency_control_specs: {frequency_control_specs}")
     
-    # Try to read parameters from file if not provided
-    if not kwargs:
-        try:
-            with open('frequency_cap.json', 'r') as f:
-                kwargs = f.read().strip()
-                print(f"DEBUG: Read kwargs from file: {kwargs}")
-        except (FileNotFoundError, IOError):
-            # If file doesn't exist, use default empty object
-            kwargs = "{}"
-    
-    # Convert kwargs to dictionary
-    try:
-        if isinstance(kwargs, dict):
-            kwargs_dict = kwargs
-            print("DEBUG: kwargs is already a dictionary")
-        elif isinstance(kwargs, str):
-            # Try to parse as JSON
-            try:
-                kwargs_dict = json.loads(kwargs)
-                print("DEBUG: Successfully parsed kwargs string as JSON")
-            except json.JSONDecodeError as e:
-                error_msg = f"Failed to parse kwargs as JSON: {str(e)}"
-                print(f"DEBUG ERROR: {error_msg}")
-                return json.dumps({"error": error_msg, "kwargs_received": kwargs}, indent=2)
-        else:
-            error_msg = f"Unexpected kwargs type: {type(kwargs)}"
-            print(f"DEBUG ERROR: {error_msg}")
-            return json.dumps({"error": error_msg, "kwargs_received": str(kwargs)}, indent=2)
-    except Exception as e:
-        error_msg = f"Error handling kwargs: {str(e)}"
-        print(f"DEBUG ERROR: {error_msg}")
-        return json.dumps({"error": error_msg, "kwargs_received": str(kwargs)}, indent=2)
-    
-    # Build the changes dictionary directly from kwargs_dict
+    # Build the changes dictionary directly from parameters
     changes = {}
-    for key in ['bid_strategy', 'bid_amount', 'frequency_control_specs', 'status']:
-        if key in kwargs_dict and kwargs_dict[key] is not None:
-            changes[key] = kwargs_dict[key]
+    if bid_strategy is not None:
+        changes['bid_strategy'] = bid_strategy
+    if bid_amount is not None:
+        changes['bid_amount'] = bid_amount
+    if frequency_control_specs is not None:
+        changes['frequency_control_specs'] = frequency_control_specs
+    if status is not None:
+        changes['status'] = status
     
     if not changes:
         return json.dumps({"error": "No update parameters provided"}, indent=2)
