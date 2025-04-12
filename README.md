@@ -2,6 +2,8 @@
 
 A [Model Calling Protocol (MCP)](https://github.com/anthropics/anthropic-tools) plugin for interacting with Meta Ads API.
 
+> **DISCLAIMER:** This is an unofficial third-party tool and is not associated with, endorsed by, or affiliated with Meta in any way. This project is maintained independently and uses Meta's public APIs according to their terms of service. Meta, Facebook, Instagram, and other Meta brand names are trademarks of their respective owners.
+
 ## Features
 
 - Seamless authentication with Meta's Graph API for desktop applications
