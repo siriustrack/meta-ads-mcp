@@ -33,7 +33,7 @@ async def get_adsets(access_token: str = None, account_id: str = None, limit: in
     
     endpoint = f"{account_id}/adsets"
     params = {
-        "fields": "id,name,campaign_id,status,daily_budget,lifetime_budget,targeting,bid_amount,bid_strategy,optimization_goal,billing_event,start_time,end_time,created_time,updated_time,frequency_control_specs",
+        "fields": "id,name,campaign_id,status,daily_budget,lifetime_budget,targeting,bid_amount,bid_strategy,optimization_goal,billing_event,start_time,end_time,created_time,updated_time,frequency_control_specs{event,interval_days,max_frequency}",
         "limit": limit
     }
     

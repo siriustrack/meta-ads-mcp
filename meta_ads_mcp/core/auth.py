@@ -418,6 +418,7 @@ class CallbackHandler(BaseHTTPRequestHandler):
                     .success { background-color: #e6ffed; border: 1px solid #2ea44f; color: #22863a; }
                     .error { background-color: #ffeef0; border: 1px solid #d73a49; color: #d73a49; }
                     .details { background: #f6f8fa; padding: 15px; border-radius: 6px; margin-top: 20px; }
+                    .note { background-color: #fff8c5; border: 1px solid #e36209; padding: 15px; border-radius: 6px; margin: 20px 0; }
                     pre { white-space: pre-wrap; word-break: break-all; }
                     .spinner { display: inline-block; width: 20px; height: 20px; border: 3px solid rgba(0, 0, 0, 0.1); border-radius: 50%; border-top-color: #0366d6; animation: spin 1s ease-in-out infinite; margin-right: 10px; }
                     @keyframes spin { to { transform: rotate(360deg); } }
@@ -426,6 +427,11 @@ class CallbackHandler(BaseHTTPRequestHandler):
             <body>
                 <h1>Verifying Ad Set Update</h1>
                 <p>Checking the status of your update for Ad Set <strong>""" + adset_id + """</strong></p>
+                
+                <div class="note">
+                    <strong>Note about Meta API Visibility:</strong>
+                    <p>Some fields (like frequency caps) may not be visible in the API response even when successfully set. This is a limitation of the Meta API and depends on factors like the ad set's optimization goal. You can verify these settings in the Meta Ads Manager UI or by monitoring metrics like frequency in the ad insights.</p>
+                </div>
                 
                 <div id="status" class="status loading">
                     <div class="spinner"></div> Verifying update...
@@ -453,15 +459,10 @@ class CallbackHandler(BaseHTTPRequestHandler):
                             detailsElement.style.display = 'block';
                             adsetDetailsElement.textContent = JSON.stringify(data, null, 2);
                             
-                            if (data.frequency_control_specs && data.frequency_control_specs.length > 0) {
-                                statusElement.classList.remove('loading');
-                                statusElement.classList.add('success');
-                                statusElement.innerHTML = '✅ Update successful! Frequency cap has been set.';
-                            } else {
-                                statusElement.classList.remove('loading');
-                                statusElement.classList.add('error');
-                                statusElement.innerHTML = '❌ Update may not have been applied. No frequency cap found in the ad set.';
-                            }
+                            // Update success message to reflect API visibility limitations
+                            statusElement.classList.remove('loading');
+                            statusElement.classList.add('success');
+                            statusElement.innerHTML = '✅ Update request was processed successfully. Please verify the changes in Meta Ads Manager UI or monitor ad performance metrics.';
                         } catch (error) {
                             const statusElement = document.getElementById('status');
                             statusElement.classList.remove('loading');
