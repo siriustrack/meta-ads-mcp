@@ -10,5 +10,4 @@ This script provides the command-line entry point for the Meta Ads MCP package.
 from meta_ads_mcp import main
 
 if __name__ == "__main__":
-    print("RUNNING LOCAL SCRIPT VERSION OF META ADS MCP")
     main() 
