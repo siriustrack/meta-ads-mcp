@@ -512,7 +512,7 @@ def meta_api_tool(func):
 # Apply the decorator to tool functions
 @mcp_server.tool()
 @meta_api_tool
-async def get_ad_accounts(access_token: str = None, user_id: str = "me", limit: int = 10) -> str:
+async def get_ad_accounts(args: str = "", kwargs: str = "", access_token: str = None) -> str:
     """
     Get ad accounts accessible by a user.
     
@@ -521,6 +521,16 @@ async def get_ad_accounts(access_token: str = None, user_id: str = "me", limit: 
         user_id: Meta user ID or "me" for the current user
         limit: Maximum number of accounts to return (default: 10)
     """
+    # Extract user_id from args (defaulting to "me" if not provided)
+    user_id = args if args else "me"
+    
+    # Extract optional parameters if needed
+    try:
+        kwargs_dict = json.loads(kwargs) if kwargs else {}
+        limit = kwargs_dict.get('limit', 10)
+    except:
+        limit = 10
+    
     endpoint = f"{user_id}/adaccounts"
     params = {
         "fields": "id,name,account_id,account_status,amount_spent,balance,currency,age,business_city,business_country_code",
@@ -533,7 +543,7 @@ async def get_ad_accounts(access_token: str = None, user_id: str = "me", limit: 
 
 @mcp_server.tool()
 @meta_api_tool
-async def get_account_info(access_token: str = None, account_id: str = None) -> str:
+async def get_account_info(args: str = "", kwargs: str = "", access_token: str = None) -> str:
     """
     Get detailed information about a specific ad account.
     
@@ -541,9 +551,12 @@ async def get_account_info(access_token: str = None, account_id: str = None) -> 
         access_token: Meta API access token (optional - will use cached token if not provided)
         account_id: Meta Ads account ID (format: act_XXXXXXXXX)
     """
+    # Extract account_id from args
+    account_id = args
+    
     # If no account ID is specified, try to get the first one for the user
     if not account_id:
-        accounts_json = await get_ad_accounts(access_token, limit=1)
+        accounts_json = await get_ad_accounts("me", json.dumps({"limit": 1}), access_token)
         accounts_data = json.loads(accounts_json)
         
         if "data" in accounts_data and accounts_data["data"]:
@@ -570,7 +583,7 @@ async def get_account_info(access_token: str = None, account_id: str = None) -> 
 
 @mcp_server.tool()
 @meta_api_tool
-async def get_campaigns(access_token: str = None, account_id: str = None, limit: int = 10, status_filter: str = "") -> str:
+async def get_campaigns(args: str = "", kwargs: str = "", access_token: str = None) -> str:
     """
     Get campaigns for a Meta Ads account with optional filtering.
     
@@ -580,9 +593,21 @@ async def get_campaigns(access_token: str = None, account_id: str = None, limit:
         limit: Maximum number of campaigns to return (default: 10)
         status_filter: Filter by status (empty for all, or 'ACTIVE', 'PAUSED', etc.)
     """
+    # Extract account_id from args
+    account_id = args
+    
+    # Extract optional parameters if needed
+    try:
+        kwargs_dict = json.loads(kwargs) if kwargs else {}
+        limit = kwargs_dict.get('limit', 10)
+        status_filter = kwargs_dict.get('status_filter', "")
+    except:
+        limit = 10
+        status_filter = ""
+    
     # If no account ID is specified, try to get the first one for the user
     if not account_id:
-        accounts_json = await get_ad_accounts(access_token, limit=1)
+        accounts_json = await get_ad_accounts("me", json.dumps({"limit": 1}), access_token)
         accounts_data = json.loads(accounts_json)
         
         if "data" in accounts_data and accounts_data["data"]:
@@ -605,7 +630,7 @@ async def get_campaigns(access_token: str = None, account_id: str = None, limit:
 
 @mcp_server.tool()
 @meta_api_tool
-async def get_campaign_details(access_token: str = None, campaign_id: str = None) -> str:
+async def get_campaign_details(args: str = "", kwargs: str = "", access_token: str = None) -> str:
     """
     Get detailed information about a specific campaign.
     
@@ -613,6 +638,9 @@ async def get_campaign_details(access_token: str = None, campaign_id: str = None
         access_token: Meta API access token (optional - will use cached token if not provided)
         campaign_id: Meta Ads campaign ID
     """
+    # Extract campaign_id from args
+    campaign_id = args
+    
     if not campaign_id:
         return json.dumps({"error": "No campaign ID provided"}, indent=2)
     
@@ -687,7 +715,7 @@ async def create_campaign(
 
 @mcp_server.tool()
 @meta_api_tool
-async def get_adsets(access_token: str = None, account_id: str = None, limit: int = 10, campaign_id: str = "") -> str:
+async def get_adsets(args: str = "", kwargs: str = "", access_token: str = None) -> str:
     """
     Get ad sets for a Meta Ads account with optional filtering by campaign.
     
@@ -697,9 +725,21 @@ async def get_adsets(access_token: str = None, account_id: str = None, limit: in
         limit: Maximum number of ad sets to return (default: 10)
         campaign_id: Optional campaign ID to filter by
     """
+    # Extract account_id from args
+    account_id = args
+    
+    # Extract optional parameters if needed
+    try:
+        kwargs_dict = json.loads(kwargs) if kwargs else {}
+        limit = kwargs_dict.get('limit', 10)
+        campaign_id = kwargs_dict.get('campaign_id', "")
+    except:
+        limit = 10
+        campaign_id = ""
+    
     # If no account ID is specified, try to get the first one for the user
     if not account_id:
-        accounts_json = await get_ad_accounts(access_token, limit=1)
+        accounts_json = await get_ad_accounts("me", json.dumps({"limit": 1}), access_token)
         accounts_data = json.loads(accounts_json)
         
         if "data" in accounts_data and accounts_data["data"]:
@@ -753,14 +793,7 @@ async def get_adset_details(args: str = "", kwargs: str = "", access_token: str 
 
 @mcp_server.tool()
 @meta_api_tool
-async def update_adset(
-    access_token: str = None,
-    adset_id: str = None,
-    bid_strategy: str = None,
-    bid_amount: int = None,
-    frequency_control_specs: List[Dict[str, Any]] = None,
-    status: str = None
-) -> str:
+async def update_adset(args: str = "", kwargs: str = "", access_token: str = None) -> str:
     """
     Update an existing ad set with new settings including frequency caps.
     
@@ -775,8 +808,24 @@ async def update_adset(
             - max_frequency: Maximum number of times to show the ad
         status: Update ad set status (ACTIVE, PAUSED, etc.)
     """
+    # Extract adset_id from args
+    adset_id = args
+    
     if not adset_id:
         return json.dumps({"error": "No ad set ID provided"}, indent=2)
+    
+    # Extract optional parameters
+    try:
+        kwargs_dict = json.loads(kwargs) if kwargs else {}
+        bid_strategy = kwargs_dict.get('bid_strategy')
+        bid_amount = kwargs_dict.get('bid_amount')
+        frequency_control_specs = kwargs_dict.get('frequency_control_specs')
+        status = kwargs_dict.get('status')
+    except:
+        bid_strategy = None
+        bid_amount = None
+        frequency_control_specs = None
+        status = None
     
     endpoint = f"{adset_id}"
     params = {}
@@ -806,13 +855,7 @@ async def update_adset(
 
 @mcp_server.tool()
 @meta_api_tool
-async def get_ads(
-    access_token: str = None,
-    account_id: str = None,
-    limit: int = 10,
-    campaign_id: str = "",
-    adset_id: str = ""
-) -> str:
+async def get_ads(args: str = "", kwargs: str = "", access_token: str = None) -> str:
     """
     Get ads for a Meta Ads account with optional filtering.
     
@@ -823,9 +866,23 @@ async def get_ads(
         campaign_id: Optional campaign ID to filter by
         adset_id: Optional ad set ID to filter by
     """
+    # Extract account_id from args
+    account_id = args
+    
+    # Extract optional parameters
+    try:
+        kwargs_dict = json.loads(kwargs) if kwargs else {}
+        limit = kwargs_dict.get('limit', 10)
+        campaign_id = kwargs_dict.get('campaign_id', "")
+        adset_id = kwargs_dict.get('adset_id', "")
+    except:
+        limit = 10
+        campaign_id = ""
+        adset_id = ""
+    
     # If no account ID is specified, try to get the first one for the user
     if not account_id:
-        accounts_json = await get_ad_accounts(access_token=access_token, limit=1)
+        accounts_json = await get_ad_accounts("me", json.dumps({"limit": 1}), access_token)
         accounts_data = json.loads(accounts_json)
         
         if "data" in accounts_data and accounts_data["data"]:
@@ -851,7 +908,7 @@ async def get_ads(
 
 @mcp_server.tool()
 @meta_api_tool
-async def get_ad_details(access_token: str = None, ad_id: str = None) -> str:
+async def get_ad_details(args: str = "", kwargs: str = "", access_token: str = None) -> str:
     """
     Get detailed information about a specific ad.
     
@@ -859,6 +916,9 @@ async def get_ad_details(access_token: str = None, ad_id: str = None) -> str:
         access_token: Meta API access token (optional - will use cached token if not provided)
         ad_id: Meta Ads ad ID
     """
+    # Extract ad_id from args
+    ad_id = args
+    
     if not ad_id:
         return json.dumps({"error": "No ad ID provided"}, indent=2)
         
@@ -873,7 +933,7 @@ async def get_ad_details(access_token: str = None, ad_id: str = None) -> str:
 
 @mcp_server.tool()
 @meta_api_tool
-async def get_ad_creatives(access_token: str = None, ad_id: str = None) -> str:
+async def get_ad_creatives(args: str = "", kwargs: str = "", access_token: str = None) -> str:
     """
     Get creative details for a specific ad. Best if combined with get_ad_image to get the full image.
     
@@ -881,6 +941,9 @@ async def get_ad_creatives(access_token: str = None, ad_id: str = None) -> str:
         access_token: Meta API access token (optional - will use cached token if not provided)
         ad_id: Meta Ads ad ID
     """
+    # Extract ad_id from args
+    ad_id = args
+    
     if not ad_id:
         return json.dumps({"error": "No ad ID provided"}, indent=2)
         
