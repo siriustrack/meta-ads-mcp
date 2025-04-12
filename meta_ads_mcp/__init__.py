@@ -36,3 +36,6 @@ from .core import (
 def entrypoint():
     """Main entry point for the package when invoked with uvx."""
     return main() 
+
+# Re-export main for direct access
+main = main 

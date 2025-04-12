@@ -10,3 +10,13 @@ wheels/
 .venv
 .cursor/rules/meta-ads-credentials.mdc
 .DS_Store
+
+# Development environment files
+.python-version
+poetry.lock
+uv.lock
+.uv.toml
+.cursor/
+
+# Generated content
+ad_creatives/

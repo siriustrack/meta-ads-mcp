@@ -10,7 +10,8 @@ import json
 import os
 
 # Import the auth manager from our Meta Ads MCP module
-from meta_ads_generated import auth_manager, get_ad_accounts
+from meta_ads_mcp.core.auth import auth_manager
+from meta_ads_mcp.core.accounts import get_ad_accounts
 
 async def test_authentication(app_id=None, force_login=False):
     """Test the authentication flow and run a simple command"""
