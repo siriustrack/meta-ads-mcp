@@ -1349,15 +1349,13 @@ async def debug_image_download(url="", ad_id="", access_token=None):
 @meta_api_tool
 async def authenticate(access_token: str = None) -> str:
     """
-    Get a clickable login link for Meta Ads authentication. The link is safe to share with the LLM
-    as it only initiates the standard OAuth flow where the user logs in directly with Meta - no
-    credentials are exposed in the process.
+    Get a clickable login link for Meta Ads authentication.
     
     Args:
         access_token: Meta API access token (optional - will use cached token if not provided)
     
     Returns:
-        A clickable resource link for Meta authentication that safely initiates the OAuth flow
+        A clickable resource link for Meta authentication
     """
     # Check if we have a cached token
     cached_token = auth_manager.get_access_token()
