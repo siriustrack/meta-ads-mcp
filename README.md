@@ -4,6 +4,8 @@ A [Model Calling Protocol (MCP)](https://github.com/anthropics/anthropic-tools) 
 
 > **DISCLAIMER:** This is an unofficial third-party tool and is not associated with, endorsed by, or affiliated with Meta in any way. This project is maintained independently and uses Meta's public APIs according to their terms of service. Meta, Facebook, Instagram, and other Meta brand names are trademarks of their respective owners.
 
+Screenhot: using an LLM to understand your ad performance.
+
 ![Meta Ads MCP in action: Visualize ad performance metrics and creative details directly in Claude or your favorite MCP client, with rich insights about campaign reach, engagement, and costs](./images/meta-ads-example.png)
 
 ## Features
